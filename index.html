@@ -9,7 +9,15 @@
   <script src="fabric.min.js"></script>
   <style>
     body { touch-action: pan-y; }
-    .canvas-container { margin: 0 auto; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2); }
+    #canvasWrapper {
+      touch-action: none;
+      overflow: hidden !important;
+    }
+    .canvas-container {
+      margin: auto !important;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2);
+      touch-action: none !important;
+    }
     /* 커스텀 스크롤바 */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
@@ -126,7 +134,7 @@
   <div class="flex-1 flex flex-col md:flex-row overflow-hidden relative main-app-container">
 
     <!-- 중앙 캔버스 작업 영역 -->
-    <main class="flex-1 bg-slate-200 flex flex-col items-center justify-center p-2 sm:p-4 relative overflow-auto" id="canvasWrapper">
+    <main class="flex-1 bg-slate-200 flex flex-col items-center justify-center p-2 sm:p-4 relative overflow-hidden" id="canvasWrapper">
       <!-- 캔버스 엘리먼트 -->
       <canvas id="mainCanvas"></canvas>
 
@@ -948,13 +956,24 @@
       const wrapW = Math.max(100, wrapper.clientWidth - 16);
       const wrapH = Math.max(100, wrapper.clientHeight - 16);
       
-      const scale = Math.min(wrapW / canvasWidth, wrapH / canvasHeight, 1);
-      const safeScale = (scale > 0.02) ? scale : 0.4;
-      
+      const scale = Math.min(wrapW / canvasWidth, wrapH / canvasHeight);
+      const safeScale = (scale > 0.005) ? scale : 0.5;
+      const displayW = Math.max(1, Math.round(canvasWidth * safeScale));
+      const displayH = Math.max(1, Math.round(canvasHeight * safeScale));
+
+      // Fabric 네이티브 크기 및 줌 설정 (CSS transform 사용 안함 -> 터치 및 좌표 100% 일치)
+      canvas.setDimensions({ width: displayW, height: displayH });
+      canvas.setZoom(safeScale);
+
       if (canvasEl && canvasEl.parentElement) {
-        canvasEl.parentElement.style.transform = `scale(${safeScale})`;
-        canvasEl.parentElement.style.transformOrigin = 'center center';
+        canvasEl.parentElement.style.transform = '';
+        canvasEl.parentElement.style.transformOrigin = '';
+        canvasEl.parentElement.style.width = displayW + 'px';
+        canvasEl.parentElement.style.height = displayH + 'px';
+        canvasEl.parentElement.style.margin = 'auto';
       }
+      canvas.calcOffset();
+      canvas.requestRenderAll();
     }
     window.addEventListener('resize', fitCanvasToScreen);
     window.addEventListener('orientationchange', () => setTimeout(fitCanvasToScreen, 200));
@@ -1135,6 +1154,7 @@
         borderColor: '#6366f1',
         borderScaleFactor: 2,
         cornerSize: 14,
+        touchCornerSize: 26,
         transparentCorners: false,
         hasRotatingPoint: true,
         rotatingPointOffset: 32,
@@ -1871,8 +1891,11 @@
     function resetActiveTransform() {
       const active = getActiveLayer();
       if (active && active.fabricObj) {
-        active.fabricObj.center();
         active.fabricObj.set({
+          left: canvasWidth / 2,
+          top: canvasHeight / 2,
+          originX: 'center',
+          originY: 'center',
           scaleX: 1,
           scaleY: 1,
           angle: 0,
@@ -1888,7 +1911,12 @@
     function centerActiveObject() {
       const active = getActiveLayer();
       if (active && active.fabricObj) {
-        active.fabricObj.center();
+        active.fabricObj.set({
+          left: canvasWidth / 2,
+          top: canvasHeight / 2,
+          originX: 'center',
+          originY: 'center'
+        });
         active.fabricObj.setCoords();
         canvas.renderAll();
       }
@@ -2522,12 +2550,19 @@
         return;
       }
       canvas.discardActiveObject();
+      
+      // 원본 해상도(1:1 고화질)로 캔버스 복원 후 내보내기
+      canvas.setZoom(1);
+      canvas.setDimensions({ width: canvasWidth, height: canvasHeight });
       canvas.renderAll();
 
       const link = document.createElement('a');
       link.download = `WordOverlay_Merged_${Date.now()}.png`;
       link.href = canvas.toDataURL({ format: 'png', quality: 1.0 });
       link.click();
+
+      // 내보내기 완료 후 다시 현재 기기 화면 크기에 맞게 반응형 리사이즈
+      fitCanvasToScreen();
     });
 
     // 투명 글씨 스탬프 단독 저장 (현재 선택된 글씨만 투명 PNG로 저장)
