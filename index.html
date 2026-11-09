@@ -34,12 +34,66 @@
       display: none !important;
     }
 
-    /* 우측 도구 패널 고정: 창 크기를 줄여도 찌그러지지 않고 고정 너비 유지 */
-    .control-sidebar {
-      width: 360px !important;
-      min-width: 360px !important;
-      max-width: 360px !important;
-      flex-shrink: 0 !important;
+    /* 데스크톱 & 태블릿(가로/화면 768px 이상): 좌우 2단 분할 */
+    @media (min-width: 768px) {
+      .main-app-container {
+        flex-direction: row !important;
+      }
+      #canvasWrapper {
+        flex: 1 1 0% !important;
+        height: 100% !important;
+      }
+      .control-sidebar {
+        width: 360px !important;
+        min-width: 360px !important;
+        max-width: 360px !important;
+        height: 100% !important;
+        flex-shrink: 0 !important;
+        border-left: 1px solid #e2e8f0 !important;
+        border-top: none !important;
+      }
+      .mobile-only {
+        display: none !important;
+      }
+    }
+
+    /* 스마트폰(Galaxy S24 Ultra 등 세로 모드 / 767px 이하): 상하 2단 분할 */
+    @media (max-width: 767px) {
+      .main-app-container {
+        flex-direction: column !important;
+      }
+      #canvasWrapper {
+        width: 100% !important;
+        height: 48vh !important;
+        min-height: 200px !important;
+        max-height: 52vh !important;
+        flex: none !important;
+        padding: 6px !important;
+        box-sizing: border-box !important;
+      }
+      .control-sidebar {
+        width: 100% !important;
+        min-width: 100% !important;
+        max-width: 100% !important;
+        height: 52vh !important;
+        min-height: 200px !important;
+        max-height: 52vh !important;
+        flex: 1 1 auto !important;
+        border-left: none !important;
+        border-top: 2px solid #cbd5e1 !important;
+        box-shadow: 0 -4px 15px rgba(0, 0, 0, 0.08) !important;
+      }
+      /* 메뉴 접었을 때 캔버스 전체화면 확장 모드 */
+      .canvas-expanded #canvasWrapper {
+        height: calc(100vh - 105px) !important;
+        max-height: calc(100vh - 105px) !important;
+      }
+      .canvas-expanded .control-sidebar {
+        height: 45px !important;
+        min-height: 45px !important;
+        max-height: 45px !important;
+        overflow: hidden !important;
+      }
     }
   </style>
 </head>
@@ -53,23 +107,23 @@
       </div>
       <div>
         <h1 class="text-base font-bold text-slate-900 leading-none">WordOverlay</h1>
-        <span class="text-xs text-slate-500">손글씨 추출 & 레이어 합성기</span>
+        <span class="text-xs text-slate-500 hidden sm:inline">손글씨 추출 & 레이어 합성기</span>
       </div>
     </div>
 
     <!-- 액션 버튼군 -->
-    <div class="flex items-center space-x-2">
-      <button id="btnSaveStamp" class="hidden sm:inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition">
-        📁 투명 글씨(PNG)만 보관
+    <div class="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
+      <button id="btnSaveStamp" class="inline-flex items-center px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition">
+        📁 <span class="hidden sm:inline">투명 글씨 </span>보관
       </button>
-      <button id="btnExportMerged" class="inline-flex items-center px-4 py-1.5 text-xs font-semibold rounded-md text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm transition">
-        💾 최종 이미지 저장
+      <button id="btnExportMerged" class="inline-flex items-center px-3 sm:px-4 py-1.5 text-xs font-semibold rounded-md text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm transition">
+        💾 <span class="hidden sm:inline">최종 이미지 </span>저장
       </button>
     </div>
   </header>
 
   <!-- 메인 레이아웃: 좌측/상단 캔버스 워크스페이스 + 우측/하단 컨트롤 패널 -->
-  <div class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+  <div class="flex-1 flex flex-col md:flex-row overflow-hidden relative main-app-container">
 
     <!-- 중앙 캔버스 작업 영역 -->
     <main class="flex-1 bg-slate-200 flex flex-col items-center justify-center p-2 sm:p-4 relative overflow-auto" id="canvasWrapper">
@@ -82,19 +136,20 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
         <p class="text-sm font-semibold text-slate-700">작업을 시작해 보세요</p>
-        <p class="text-xs text-slate-500 mt-1">우측 패널에서 <span class="font-medium text-indigo-600">배경 사진</span>과 <span class="font-medium text-indigo-600">글씨 사진</span>을 각각 불러와 주세요.</p>
+        <p class="text-xs text-slate-500 mt-1"><span class="font-medium text-indigo-600">배경 사진</span>과 <span class="font-medium text-indigo-600">글씨 사진</span>을 각각 불러와 주세요.</p>
       </div>
 
-      <!-- 상단 툴바 (단축 액션: 선택 표시, 회전, 반전, 정렬) -->
-      <div class="absolute top-3 left-3 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 p-1 flex items-center space-x-1 z-10 text-xs select-none">
-        <span id="canvasSelectedBadge" class="px-2 py-1 bg-indigo-50 text-indigo-700 font-bold rounded text-[11px] border border-indigo-200">선택: 없음</span>
-        <div class="w-[1px] h-4 bg-slate-200 mx-0.5"></div>
-        <button id="btnTopRotate" class="px-2 py-1 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 rounded flex items-center space-x-0.5" title="시계방향 90도 회전"><span>🔄 90°</span></button>
-        <button id="btnTopFlipX" class="px-2 py-1 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 rounded flex items-center space-x-0.5" title="좌우 반전 (뒤집기)"><span>↔️ 좌우</span></button>
-        <button id="btnTopFlipY" class="px-2 py-1 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 rounded flex items-center space-x-0.5" title="상하 반전 (뒤집기)"><span>↕️ 상하</span></button>
-        <div class="w-[1px] h-4 bg-slate-200 mx-0.5"></div>
-        <button id="btnCenterText" class="px-2 py-1 text-slate-700 hover:bg-slate-100 rounded" title="글씨 중앙 배치">🎯 정중앙</button>
-        <button id="btnResetTransform" class="px-2 py-1 text-slate-700 hover:bg-slate-100 rounded" title="글씨 위치 및 각도 초기화">↺ 초기화</button>
+      <!-- 상단 툴바 (단축 액션: 선택 표시, 회전, 반전, 정렬, 모바일 화면확장) -->
+      <div class="absolute top-2 left-2 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 p-1 flex items-center space-x-1 z-10 text-xs select-none max-w-[95vw] overflow-x-auto">
+        <button id="btnToggleMobilePanel" class="px-2 py-1 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded text-[11px] font-bold md:hidden shrink-0 border border-indigo-200" title="캔버스 전체화면 / 메뉴 토글">📐 캔버스확장</button>
+        <span id="canvasSelectedBadge" class="px-2 py-1 bg-indigo-50 text-indigo-700 font-bold rounded text-[11px] border border-indigo-200 shrink-0">선택: 없음</span>
+        <div class="w-[1px] h-4 bg-slate-200 mx-0.5 shrink-0"></div>
+        <button id="btnTopRotate" class="px-2 py-1 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 rounded flex items-center space-x-0.5 shrink-0" title="시계방향 90도 회전"><span>🔄 90°</span></button>
+        <button id="btnTopFlipX" class="px-2 py-1 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 rounded flex items-center space-x-0.5 shrink-0" title="좌우 반전 (뒤집기)"><span>↔️ 좌우</span></button>
+        <button id="btnTopFlipY" class="px-2 py-1 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 rounded flex items-center space-x-0.5 shrink-0" title="상하 반전 (뒤집기)"><span>↕️ 상하</span></button>
+        <div class="w-[1px] h-4 bg-slate-200 mx-0.5 shrink-0"></div>
+        <button id="btnCenterText" class="px-2 py-1 text-slate-700 hover:bg-slate-100 rounded shrink-0" title="글씨 중앙 배치">🎯 정중앙</button>
+        <button id="btnResetTransform" class="px-2 py-1 text-slate-700 hover:bg-slate-100 rounded shrink-0" title="글씨 위치 및 각도 초기화">↺ 초기화</button>
       </div>
     </main>
 
@@ -890,15 +945,36 @@
     // --- 2. 화면 크기 반응형 리사이즈 ---
     function fitCanvasToScreen() {
       if (!wrapper) return;
-      const wrapW = wrapper.clientWidth - 32;
-      const wrapH = wrapper.clientHeight - 32;
+      const wrapW = Math.max(100, wrapper.clientWidth - 16);
+      const wrapH = Math.max(100, wrapper.clientHeight - 16);
       
       const scale = Math.min(wrapW / canvasWidth, wrapH / canvasHeight, 1);
+      const safeScale = (scale > 0.02) ? scale : 0.4;
       
-      canvasEl.parentElement.style.transform = `scale(${scale})`;
-      canvasEl.parentElement.style.transformOrigin = 'center center';
+      if (canvasEl && canvasEl.parentElement) {
+        canvasEl.parentElement.style.transform = `scale(${safeScale})`;
+        canvasEl.parentElement.style.transformOrigin = 'center center';
+      }
     }
     window.addEventListener('resize', fitCanvasToScreen);
+    window.addEventListener('orientationchange', () => setTimeout(fitCanvasToScreen, 200));
+
+    // 모바일 캔버스 확장/도구메뉴 토글 버튼
+    const btnToggleMobilePanel = document.getElementById('btnToggleMobilePanel');
+    if (btnToggleMobilePanel) {
+      btnToggleMobilePanel.addEventListener('click', () => {
+        const container = document.querySelector('.main-app-container');
+        if (!container) return;
+        if (container.classList.contains('canvas-expanded')) {
+          container.classList.remove('canvas-expanded');
+          btnToggleMobilePanel.innerText = '📐 캔버스확장';
+        } else {
+          container.classList.add('canvas-expanded');
+          btnToggleMobilePanel.innerText = '⚙️ 도구열기';
+        }
+        setTimeout(fitCanvasToScreen, 150);
+      });
+    }
 
     // 그림자 객체 생성 헬퍼 (가장 먼저 선언하여 어디서든 안전하게 호출)
     function buildFabricShadow() {
