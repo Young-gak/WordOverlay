@@ -1,0 +1,2507 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>WordOverlay - 손글씨 추출 & 이미지 합성</title>
+  <!-- 오프라인 완전 지원: 최신 Tailwind JS 및 Fabric.js -->
+  <script src="tailwind.js"></script>
+  <script src="fabric.min.js"></script>
+  <style>
+    body { touch-action: pan-y; }
+    .canvas-container { margin: 0 auto; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2); }
+    /* 커스텀 스크롤바 */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+    /* 화면 겹침 원천 차단: 모달 팝업은 무조건 최상위(z-index 999999) 고정 */
+    #eraserModal, #cropModal {
+      position: fixed !important;
+      inset: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      z-index: 999999 !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      background-color: rgba(0, 0, 0, 0.75) !important;
+      backdrop-filter: blur(4px) !important;
+    }
+
+    /* 숨김 처리 */
+    #eraserModal.hidden, #cropModal.hidden {
+      display: none !important;
+    }
+
+    /* 우측 도구 패널 고정: 창 크기를 줄여도 찌그러지지 않고 고정 너비 유지 */
+    .control-sidebar {
+      width: 360px !important;
+      min-width: 360px !important;
+      max-width: 360px !important;
+      flex-shrink: 0 !important;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 h-screen flex flex-col font-sans select-none overflow-hidden">
+
+  <!-- 상단 네비게이션 헤더 -->
+  <header class="bg-white border-b border-slate-200 px-4 py-2.5 flex items-center justify-between shrink-0 shadow-sm z-10">
+    <div class="flex items-center space-x-3">
+      <div class="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-lg shadow-inner">
+        W
+      </div>
+      <div>
+        <h1 class="text-base font-bold text-slate-900 leading-none">WordOverlay</h1>
+        <span class="text-xs text-slate-500">손글씨 추출 & 레이어 합성기</span>
+      </div>
+    </div>
+
+    <!-- 액션 버튼군 -->
+    <div class="flex items-center space-x-2">
+      <button id="btnSaveStamp" class="hidden sm:inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition">
+        📁 투명 글씨(PNG)만 보관
+      </button>
+      <button id="btnExportMerged" class="inline-flex items-center px-4 py-1.5 text-xs font-semibold rounded-md text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm transition">
+        💾 최종 이미지 저장
+      </button>
+    </div>
+  </header>
+
+  <!-- 메인 레이아웃: 좌측/상단 캔버스 워크스페이스 + 우측/하단 컨트롤 패널 -->
+  <div class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+
+    <!-- 중앙 캔버스 작업 영역 -->
+    <main class="flex-1 bg-slate-200 flex flex-col items-center justify-center p-2 sm:p-4 relative overflow-auto" id="canvasWrapper">
+      <!-- 캔버스 엘리먼트 -->
+      <canvas id="mainCanvas"></canvas>
+
+      <!-- 안내 문구 (이미지 없을 때) -->
+      <div id="emptyGuide" class="absolute pointer-events-none text-center text-slate-400 p-6 bg-white/70 backdrop-blur-sm rounded-xl border-2 border-dashed border-slate-300 shadow-sm max-w-sm">
+        <svg class="mx-auto h-12 w-12 text-slate-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+        <p class="text-sm font-semibold text-slate-700">작업을 시작해 보세요</p>
+        <p class="text-xs text-slate-500 mt-1">우측 패널에서 <span class="font-medium text-indigo-600">배경 사진</span>과 <span class="font-medium text-indigo-600">글씨 사진</span>을 각각 불러와 주세요.</p>
+      </div>
+
+      <!-- 상단 툴바 (단축 액션: 선택 표시, 회전, 반전, 정렬) -->
+      <div class="absolute top-3 left-3 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 p-1 flex items-center space-x-1 z-10 text-xs select-none">
+        <span id="canvasSelectedBadge" class="px-2 py-1 bg-indigo-50 text-indigo-700 font-bold rounded text-[11px] border border-indigo-200">선택: 없음</span>
+        <div class="w-[1px] h-4 bg-slate-200 mx-0.5"></div>
+        <button id="btnTopRotate" class="px-2 py-1 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 rounded flex items-center space-x-0.5" title="시계방향 90도 회전"><span>🔄 90°</span></button>
+        <button id="btnTopFlipX" class="px-2 py-1 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 rounded flex items-center space-x-0.5" title="좌우 반전 (뒤집기)"><span>↔️ 좌우</span></button>
+        <button id="btnTopFlipY" class="px-2 py-1 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 rounded flex items-center space-x-0.5" title="상하 반전 (뒤집기)"><span>↕️ 상하</span></button>
+        <div class="w-[1px] h-4 bg-slate-200 mx-0.5"></div>
+        <button id="btnCenterText" class="px-2 py-1 text-slate-700 hover:bg-slate-100 rounded" title="글씨 중앙 배치">🎯 정중앙</button>
+        <button id="btnResetTransform" class="px-2 py-1 text-slate-700 hover:bg-slate-100 rounded" title="글씨 위치 및 각도 초기화">↺ 초기화</button>
+      </div>
+    </main>
+
+    <!-- 우측 도구 패널 (설정 및 제어): control-sidebar 클래스로 크기 흔들림 및 겹침 완전 방지 -->
+    <aside class="control-sidebar bg-white border-l border-slate-200 flex flex-col shrink-0 overflow-y-auto">
+      
+      <!-- 탭 헤더 -->
+      <div class="flex border-b border-slate-200 text-xs font-semibold text-center bg-slate-50">
+        <button id="tabBtnExtract" class="flex-1 py-2.5 px-3 border-b-2 border-indigo-600 text-indigo-600 bg-white">1. 글씨 추출 & 정제</button>
+        <button id="tabBtnStyle" class="flex-1 py-2.5 px-3 border-b-2 border-transparent text-slate-500 hover:text-slate-800">2. 스타일 & 변형</button>
+      </div>
+
+      <!-- 탭 1 컨텐츠: 글씨 추출 & 영역 지정 -->
+      <div id="tabContentExtract" class="p-4 space-y-5 flex-1">
+        
+        <!-- 1. 이미지 불러오기 섹션 -->
+        <div class="space-y-2">
+          <span class="text-xs font-bold text-slate-600 uppercase tracking-wider block">이미지 입력</span>
+          
+          <div class="grid grid-cols-2 gap-2">
+            <!-- 배경 불러오기 -->
+            <label class="cursor-pointer flex flex-col items-center justify-center p-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-lg text-center transition overflow-hidden">
+              <span class="text-xs font-semibold text-slate-700 shrink-0">🖼️ 배경 사진</span>
+              <span class="text-[10px] text-slate-500 mt-1 truncate max-w-full px-1 block font-mono" id="bgFileName" title="사진 열기">사진 열기</span>
+              <input type="file" id="inputBg" accept="image/*" class="hidden">
+            </label>
+
+            <!-- 새 글씨 사진 추가 -->
+            <label class="cursor-pointer flex flex-col items-center justify-center p-2.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg text-center transition overflow-hidden">
+              <span class="text-xs font-semibold text-indigo-800 shrink-0">✍️ + 글씨 추가</span>
+              <span class="text-[10px] text-indigo-600 mt-1 truncate max-w-full px-1 block font-mono" id="textFileName" title="새 글씨 추가">새 글씨 열기</span>
+              <input type="file" id="inputText" accept="image/*" class="hidden">
+            </label>
+          </div>
+
+          <!-- 등록된 글씨 레이어 목록 (선택/삭제/전환) -->
+          <div id="layerListContainer" class="pt-1 space-y-1">
+            <div class="flex items-center justify-between text-xs text-slate-600">
+              <span class="font-bold">글씨 레이어 (<span id="layerCount">0</span>개)</span>
+              <div class="flex items-center space-x-2">
+                <button id="btnUndoDeleteLayer" class="text-[11px] text-indigo-600 hover:text-indigo-800 hover:underline flex items-center space-x-0.5" title="삭제한 글씨 복원 (Ctrl+Z)">
+                  <span>↩️ 복원(Ctrl+Z)</span>
+                </button>
+                <button id="btnDeleteSelectedLayer" class="text-[11px] text-rose-500 hover:text-rose-700 hover:underline">선택 레이어 삭제</button>
+              </div>
+            </div>
+            <div id="layerBadgeList" class="flex flex-wrap gap-1.5 p-1.5 bg-slate-50 border border-slate-200 rounded min-h-[32px] items-center">
+              <span class="text-[11px] text-slate-400">아직 추가된 글씨가 없습니다.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. 글씨 추출 정밀 슬라이더 (핵심 알고리즘) -->
+        <div class="space-y-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-slate-700">배경 투명화 및 누끼 강도</span>
+            <button id="btnAutoAdjust" class="text-[11px] text-indigo-600 hover:underline">자동 맞춤</button>
+          </div>
+
+          <!-- 종이 날리기 슬라이더 (White Threshold) -->
+          <div>
+            <div class="flex justify-between text-xs text-slate-600 mb-1">
+              <span>종이 그림자 날리기 (투명화)</span>
+              <span id="valPaperCut" class="font-mono text-indigo-600 font-semibold">210</span>
+            </div>
+            <input type="range" id="sliderPaperCut" min="50" max="255" value="210" class="w-full accent-indigo-600 cursor-pointer">
+            <span class="text-[10px] text-slate-400">값이 낮을수록 회색 종이나 그림자가 더 깨끗이 지워집니다.</span>
+          </div>
+
+          <!-- 글씨 진하기 슬라이더 (Black Threshold) -->
+          <div>
+            <div class="flex justify-between text-xs text-slate-600 mb-1">
+              <span>글씨 선명도 / 먹물 농도</span>
+              <span id="valInkBoost" class="font-mono text-indigo-600 font-semibold">120</span>
+            </div>
+            <input type="range" id="sliderInkBoost" min="0" max="220" value="120" class="w-full accent-indigo-600 cursor-pointer">
+            <span class="text-[10px] text-slate-400">값이 높을수록 붓글씨 터치가 더 진하고 불투명해집니다.</span>
+          </div>
+        </div>
+
+        <!-- 3. 영역 지정 및 정제 도구 (지우개 & 크롭) -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-slate-700">글씨 다듬기 (지우개 & 크롭)</span>
+          </div>
+          <p class="text-[11px] text-slate-500">주변의 잡티나 낙서를 지우고 필요한 글씨만 지정하세요.</p>
+          
+          <!-- 지우개 버튼 -->
+          <button id="btnOpenEraser" class="w-full py-2 px-2.5 text-xs font-semibold rounded border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 flex items-center justify-center space-x-1.5 transition">
+            <span>🧹 불필요한 부분 쓱쓱 지우기 (지우개)</span>
+          </button>
+
+          <!-- 올가미 떼어내기 & 크롭 버튼군 -->
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <button id="btnCropLasso" class="py-2 px-2 text-xs font-bold rounded border border-indigo-300 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 flex items-center justify-center space-x-1 shadow-sm transition" title="원하는 글씨 둘레를 올가미로 그려 새 독립 레이어로 떼어냅니다">
+              <span>✂️ 올가미 떼어내기</span>
+            </button>
+            <button id="btnCropRect" class="py-2 px-2 text-xs font-medium rounded border border-slate-300 bg-white hover:bg-slate-50 flex items-center justify-center space-x-1" title="사각형으로 영역 지정">
+              <span>🔲 사각형 선택</span>
+            </button>
+          </div>
+          <button id="btnResetCrop" class="w-full py-1 text-[11px] text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded">
+            ✕ 전체 글씨 및 지우개 원본 복원
+          </button>
+        </div>
+
+        <!-- 4. 나의 프리셋 (스타일 & 변형에서 생성한 프리셋 목록) -->
+        <div class="space-y-1.5 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-slate-700">🎨 나의 프리셋</span>
+            <span class="text-[10px] text-slate-400">클릭 시 즉시 스타일 적용</span>
+          </div>
+          <div id="myPresetList" class="flex flex-wrap gap-1.5 text-xs pt-1">
+            <span class="text-[11px] text-slate-400">등록된 프리셋이 없습니다.</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 탭 2 컨텐츠: 스타일 & 꾸미기 -->
+      <div id="tabContentStyle" class="p-4 space-y-5 flex-1 hidden">
+
+        <!-- 0. 글씨 변형 (회전 & 반전) -->
+        <div class="space-y-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-slate-700">글씨 변형 (회전 & 반전)</span>
+            <span id="activeLayerIndicator" class="text-[10px] text-indigo-600 font-semibold truncate max-w-[150px]"></span>
+          </div>
+
+          <!-- 반전 및 90도 회전 퀵 버튼 그리드 -->
+          <div class="grid grid-cols-2 gap-2">
+            <button id="btnFlipX" class="py-1.5 px-2 bg-white hover:bg-indigo-50 hover:text-indigo-600 border border-slate-300 hover:border-indigo-300 rounded text-xs font-medium text-slate-700 flex items-center justify-center space-x-1 shadow-sm transition" title="좌우를 반대로 뒤집습니다">
+              <span>↔️ 좌우 반전</span>
+            </button>
+            <button id="btnFlipY" class="py-1.5 px-2 bg-white hover:bg-indigo-50 hover:text-indigo-600 border border-slate-300 hover:border-indigo-300 rounded text-xs font-medium text-slate-700 flex items-center justify-center space-x-1 shadow-sm transition" title="상하를 거꾸로 뒤집습니다">
+              <span>↕️ 상하 반전</span>
+            </button>
+            <button id="btnRotate90" class="py-1.5 px-2 bg-white hover:bg-indigo-50 hover:text-indigo-600 border border-slate-300 hover:border-indigo-300 rounded text-xs font-medium text-slate-700 flex items-center justify-center space-x-1 shadow-sm transition" title="시계방향 90도 회전">
+              <span>🔄 90° 회전</span>
+            </button>
+            <button id="btnRotateMinus90" class="py-1.5 px-2 bg-white hover:bg-indigo-50 hover:text-indigo-600 border border-slate-300 hover:border-indigo-300 rounded text-xs font-medium text-slate-700 flex items-center justify-center space-x-1 shadow-sm transition" title="반시계방향 90도 회전">
+              <span>↺ -90° 회전</span>
+            </button>
+          </div>
+
+          <!-- 미세 회전 각도 슬라이더 (0~360도) -->
+          <div>
+            <div class="flex justify-between text-xs text-slate-600 mb-1">
+              <span>회전 각도 조절</span>
+              <span id="valAngle" class="font-mono text-indigo-600 font-semibold">0°</span>
+            </div>
+            <input type="range" id="sliderAngle" min="0" max="360" value="0" class="w-full accent-indigo-600 cursor-pointer">
+            <div class="flex justify-between text-[10px] text-slate-400 mt-0.5">
+              <span>0°</span>
+              <span>90°</span>
+              <span>180°</span>
+              <span>270°</span>
+              <span>360°</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 1. 글씨 색상 지정 -->
+        <div class="space-y-2">
+          <span class="text-xs font-bold text-slate-700">글씨 색상 변경</span>
+          
+          <!-- 기본 색상 팔레트 -->
+          <div class="flex items-center space-x-2">
+            <button class="color-chip w-7 h-7 rounded-full border-2 border-indigo-600 bg-black shadow-sm" data-color="#000000" title="검정 원본"></button>
+            <button class="color-chip w-7 h-7 rounded-full border border-slate-300 bg-white shadow-sm" data-color="#FFFFFF" title="흰색"></button>
+            <button class="color-chip w-7 h-7 rounded-full border border-slate-300 bg-amber-400 shadow-sm" data-color="#F59E0B" title="골드/금색"></button>
+            <button class="color-chip w-7 h-7 rounded-full border border-slate-300 bg-rose-500 shadow-sm" data-color="#F43F5E" title="포인트 레드"></button>
+            <button class="color-chip w-7 h-7 rounded-full border border-slate-300 bg-indigo-500 shadow-sm" data-color="#6366F1" title="인디고 블루"></button>
+            
+            <label class="relative cursor-pointer ml-auto">
+              <span class="text-[11px] text-slate-500 underline mr-1">직접선택</span>
+              <input type="color" id="customColorPicker" value="#000000" class="w-6 h-6 border-0 rounded cursor-pointer align-middle">
+            </label>
+          </div>
+        </div>
+
+        <!-- 2. 투명도 및 명암 조절 -->
+        <div class="space-y-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+          <div>
+            <div class="flex justify-between text-xs text-slate-600 mb-1">
+              <span>글씨 불투명도</span>
+              <span id="valOpacity" class="font-mono text-indigo-600 font-semibold">100%</span>
+            </div>
+            <input type="range" id="sliderOpacity" min="10" max="100" value="100" class="w-full accent-indigo-600 cursor-pointer">
+          </div>
+        </div>
+
+        <!-- 3. 시인성 강화 (그림자 효과 및 세부 조절바) -->
+        <div class="space-y-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-slate-700">배경 분리 그림자 (가독성 향상)</span>
+            <input type="checkbox" id="chkShadow" class="w-4 h-4 text-indigo-600 rounded cursor-pointer">
+          </div>
+          <p class="text-[11px] text-slate-400">복잡한 사진 위에서 글씨가 더 또렷하게 보이도록 그림자를 넣습니다.</p>
+
+          <!-- 그림자 체크 시 나타나는 세부 조절바 영역 -->
+          <div id="shadowControls" class="space-y-3 pt-2 border-t border-slate-200 hidden">
+            
+            <!-- 1. 그림자 농도 (불투명도) -->
+            <div>
+              <div class="flex justify-between text-xs text-slate-600 mb-1">
+                <span>그림자 농도 (진하기)</span>
+                <span id="valShadowOpacity" class="font-mono text-indigo-600 font-semibold">50%</span>
+              </div>
+              <input type="range" id="sliderShadowOpacity" min="10" max="100" value="50" class="w-full accent-indigo-600 cursor-pointer">
+            </div>
+
+            <!-- 2. 그림자 크기 (퍼짐 정도 / Blur) -->
+            <div>
+              <div class="flex justify-between text-xs text-slate-600 mb-1">
+                <span>그림자 크기 (부드러운 퍼짐)</span>
+                <span id="valShadowBlur" class="font-mono text-indigo-600 font-semibold">10px</span>
+              </div>
+              <input type="range" id="sliderShadowBlur" min="0" max="40" value="10" class="w-full accent-indigo-600 cursor-pointer">
+            </div>
+
+            <!-- 3. 그림자 방향 (0~360도 각도) -->
+            <div>
+              <div class="flex justify-between text-xs text-slate-600 mb-1">
+                <span>그림자 방향 (각도)</span>
+                <span id="valShadowAngle" class="font-mono text-indigo-600 font-semibold">135° (우측 하단)</span>
+              </div>
+              <input type="range" id="sliderShadowAngle" min="0" max="360" value="135" class="w-full accent-indigo-600 cursor-pointer">
+            </div>
+
+            <!-- 4. 글자와 그림자 거리 (Distance / Offset) -->
+            <div>
+              <div class="flex justify-between text-xs text-slate-600 mb-1">
+                <span>글자와 그림자 거리</span>
+                <span id="valShadowDistance" class="font-mono text-indigo-600 font-semibold">5px</span>
+              </div>
+              <input type="range" id="sliderShadowDistance" min="0" max="50" value="5" class="w-full accent-indigo-600 cursor-pointer">
+            </div>
+
+            <!-- 그림자 색상 선택 (옵션) -->
+            <div class="flex items-center justify-between text-xs text-slate-600 pt-1">
+              <span>그림자 색상</span>
+              <input type="color" id="shadowColorPicker" value="#000000" class="w-6 h-6 border-0 rounded cursor-pointer">
+            </div>
+
+          </div>
+        </div>
+
+        <!-- 4. 프리셋 설정 생성 버튼 -->
+        <button id="btnOpenPresetModal" class="w-full py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-sm flex items-center justify-center space-x-1.5 transition">
+          <span>✨ 프리셋 설정 (현재 스타일을 '나의 프리셋'으로 저장)</span>
+        </button>
+
+        <!-- 5. 레이어 제어 안내 -->
+        <div class="bg-indigo-50 p-3 rounded-lg text-[11px] text-indigo-900 leading-relaxed border border-indigo-100">
+          💡 <span class="font-semibold">조작 팁:</span> 화면의 글씨를 마우스로 직접 잡고 드래그하면 위치 이동, 모서리 핸들을 당기면 크기 조절 및 회전이 가능합니다. (스마트폰에서는 두 손가락 핀치 제스처 지원)
+        </div>
+
+      </div>
+
+      <!-- 하단 정보 -->
+      <div class="p-3 bg-slate-50 border-t border-slate-200 text-center text-[11px] text-slate-400">
+        WordOverlay Core Engine v1.0 • CPU 가속 지원
+      </div>
+
+    </aside>
+
+  </div>
+
+  <!-- 지우개 전용 모달 레이어 (독립된 대화 상자 형태) -->
+  <div id="eraserModal" class="modal-overlay bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 hidden select-none">
+    
+    <!-- 지우개 독립 팝업 윈도우 -->
+    <div class="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl flex flex-col w-[94vw] max-w-5xl h-[88vh] overflow-hidden">
+      
+      <!-- 팝업 내부 상단 헤더: 지우개 타이틀, 브러시 크기, 우측 상단 완료 버튼 -->
+      <div class="px-3 py-2 sm:px-4 sm:py-2.5 bg-slate-800 border-b border-slate-700 flex flex-wrap sm:flex-nowrap items-center justify-between shrink-0 gap-2">
+        
+        <!-- 좌측: 제목 및 안내 -->
+        <div class="flex items-center space-x-2 shrink-0">
+          <span class="text-xs sm:text-sm font-bold text-white bg-indigo-600 px-2 py-0.5 rounded">🧹 지우개 창</span>
+          <span class="text-xs text-slate-300 hidden lg:inline">불필요한 글씨/얼룩을 마우스나 S펜으로 지우세요.</span>
+        </div>
+
+        <!-- 중앙: 브러시 크기 조절바 -->
+        <div class="flex items-center space-x-2 text-xs text-slate-300 bg-slate-900 px-2.5 py-1 rounded border border-slate-700 shrink-0">
+          <span>크기:</span>
+          <span id="valEraserSize" class="font-mono text-indigo-400 font-bold w-5 text-right">24</span>
+          <input type="range" id="sliderEraserSize" min="5" max="80" value="24" class="w-16 sm:w-24 accent-indigo-500 cursor-pointer">
+        </div>
+
+        <!-- 우측: 처음대로, 취소, 그리고 뚜렷한 [지우기 완료 적용] 버튼 -->
+        <div class="flex items-center space-x-2 shrink-0 ml-auto">
+          <button id="btnResetEraserCanvas" class="px-2 py-1 sm:px-2.5 sm:py-1.5 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-200">↺ 처음대로</button>
+          <button id="btnCancelEraserModal" class="px-2.5 py-1 sm:px-3 sm:py-1.5 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-300">취소</button>
+          <button id="btnApplyEraserModal" class="px-3 py-1 sm:px-4 sm:py-1.5 text-xs sm:text-sm font-bold rounded bg-emerald-600 hover:bg-emerald-500 text-white shadow transition flex items-center space-x-1 shrink-0">
+            <span>✓ 지우기 완료 적용</span>
+          </button>
+        </div>
+
+      </div>
+
+      <!-- 지우개 캔버스 뷰어 영역 -->
+      <div class="flex-1 flex items-center justify-center p-3 relative overflow-hidden bg-slate-950/80" id="eraserCanvasWrapper">
+        <canvas id="eraserCanvas" class="max-w-full max-h-full border border-slate-700 rounded shadow-xl cursor-crosshair"></canvas>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- 이미지 크롭 & 올가미 떼어내기 모달 레이어 -->
+  <div id="cropModal" class="modal-overlay bg-black/75 backdrop-blur-sm flex flex-col hidden select-none">
+    <div class="p-3 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800 shrink-0">
+      <div class="flex items-center space-x-2">
+        <span id="cropModalTitle" class="text-sm font-semibold">✏️ 자유 올가미 선택</span>
+        <span class="text-xs text-slate-400" id="cropModalDesc">S펜이나 마우스로 원하는 글씨 둘레를 쓱 둘러 그리세요.</span>
+      </div>
+      <div class="flex items-center space-x-2">
+        <button id="btnCancelCropModal" class="px-3 py-1.5 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-200">취소</button>
+        <button id="btnApplyCropModal" class="px-3 py-1.5 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600" title="선택 영역 외의 나머지를 잘라냅니다">🔲 단순 크롭</button>
+        <button id="btnCutToNewLayer" class="px-4 py-1.5 text-xs font-bold rounded bg-indigo-600 hover:bg-indigo-500 text-white shadow-md flex items-center space-x-1" title="선택한 글씨를 새 레이어로 떼어내고 원래 자리는 투명하게 지웁니다">
+          <span>✂️ 새 레이어로 떼어내기</span>
+        </button>
+      </div>
+    </div>
+    <div class="flex-1 flex items-center justify-center p-4 relative overflow-hidden" id="cropCanvasWrapper">
+      <canvas id="cropCanvas" class="max-w-full max-h-full border border-slate-700 shadow-2xl cursor-crosshair"></canvas>
+    </div>
+  </div>
+
+  <!-- 프리셋 설정 모달 레이어 -->
+  <div id="presetModal" class="modal-overlay bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 hidden select-none">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl flex flex-col w-full max-w-md overflow-hidden text-white">
+      
+      <!-- 상단 헤더 -->
+      <div class="px-4 py-3 bg-slate-800 border-b border-slate-700 flex items-center justify-between">
+        <span class="text-sm font-bold text-white flex items-center">✨ 프리셋 설정 및 등록</span>
+        <button id="btnCancelPresetModal" class="text-slate-400 hover:text-white text-xs">✕ 닫기</button>
+      </div>
+
+      <!-- 모달 폼 컨텐츠 -->
+      <div class="p-4 space-y-4">
+        
+        <!-- 프리셋 이름 입력창 -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 mb-1">프리셋 이름</label>
+          <input type="text" id="inputPresetName" placeholder="예: 부드러운 그림자 1" class="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-xs text-white focus:outline-none focus:border-indigo-500">
+        </div>
+
+        <!-- 기능 요약 및 설명 입력창 -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 mb-1">기능 요약 및 메모</label>
+          <textarea id="inputPresetDesc" rows="2" placeholder="예: 밝은 풍경 사진에 어울리는 소프트 블랙 그림자 효과입니다." class="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-xs text-white focus:outline-none focus:border-indigo-500 resize-none"></textarea>
+        </div>
+
+        <!-- 슬라이더 컨트롤 영역 -->
+        <div class="space-y-3 bg-slate-800/60 p-3 rounded-lg border border-slate-700/80">
+          
+          <!-- 1. 그림자 농도 -->
+          <div>
+            <div class="flex justify-between text-xs text-slate-300 mb-1">
+              <span>그림자 농도</span>
+              <span id="valModalShadowOpacity" class="font-mono text-indigo-400 font-semibold">50%</span>
+            </div>
+            <input type="range" id="sliderModalShadowOpacity" min="10" max="100" value="50" class="w-full accent-indigo-500 cursor-pointer">
+          </div>
+
+          <!-- 2. 그림자 크기 -->
+          <div>
+            <div class="flex justify-between text-xs text-slate-300 mb-1">
+              <span>그림자 크기 (퍼짐)</span>
+              <span id="valModalShadowBlur" class="font-mono text-indigo-400 font-semibold">10px</span>
+            </div>
+            <input type="range" id="sliderModalShadowBlur" min="0" max="40" value="10" class="w-full accent-indigo-500 cursor-pointer">
+          </div>
+
+          <!-- 3. 그림자 방향 -->
+          <div>
+            <div class="flex justify-between text-xs text-slate-300 mb-1">
+              <span>그림자 방향 (각도)</span>
+              <span id="valModalShadowAngle" class="font-mono text-indigo-400 font-semibold">135°</span>
+            </div>
+            <input type="range" id="sliderModalShadowAngle" min="0" max="360" value="135" class="w-full accent-indigo-500 cursor-pointer">
+          </div>
+
+          <!-- 4. 글자와 그림자 거리 -->
+          <div>
+            <div class="flex justify-between text-xs text-slate-300 mb-1">
+              <span>글자와 그림자 거리</span>
+              <span id="valModalShadowDistance" class="font-mono text-indigo-400 font-semibold">5px</span>
+            </div>
+            <input type="range" id="sliderModalShadowDistance" min="0" max="50" value="5" class="w-full accent-indigo-500 cursor-pointer">
+          </div>
+
+          <!-- 그림자 색상 -->
+          <div class="flex items-center justify-between text-xs text-slate-300 pt-1">
+            <span>그림자 색상</span>
+            <input type="color" id="modalShadowColorPicker" value="#000000" class="w-6 h-6 border-0 rounded cursor-pointer">
+          </div>
+
+        </div>
+
+        <!-- 하단 액션 버튼 -->
+        <div class="flex space-x-2 pt-1">
+          <button id="btnCancelPresetModal2" class="flex-1 py-2 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-300">취소</button>
+          <button id="btnSavePresetModal" class="flex-1 py-2 text-xs font-bold rounded bg-indigo-600 hover:bg-indigo-500 text-white shadow-md">✓ 설정 (프리셋 등록)</button>
+        </div>
+
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 프리셋 상세 설명 & 실시간 조절 모달 레이어 -->
+  <div id="presetDescModal" class="modal-overlay bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 hidden select-none">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl flex flex-col w-full max-w-md overflow-hidden text-white">
+      
+      <!-- 상단 헤더 -->
+      <div class="px-4 py-3 bg-slate-800 border-b border-slate-700 flex items-center justify-between shrink-0">
+        <span class="text-sm font-bold text-white flex items-center space-x-1.5" id="descModalTitle">📖 프리셋 상세 및 설정</span>
+        <button id="btnCloseDescModal" class="text-slate-400 hover:text-white text-xs">✕ 닫기</button>
+      </div>
+
+      <!-- 모달 폼 컨텐츠 -->
+      <div class="p-4 space-y-3.5 max-h-[82vh] overflow-y-auto">
+        
+        <!-- 1. 설명 / 기능 요약 -->
+        <div>
+          <label class="text-[11px] font-bold text-slate-300 block mb-1">기능 요약 및 설명</label>
+          <input type="text" id="inputDescModalText" placeholder="이 프리셋의 특징을 적어보세요 (예: 부드럽고 몽환적인 그림자)" class="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+        </div>
+
+        <!-- 2. 실시간 조절바 영역 -->
+        <div class="space-y-3 bg-slate-800/80 p-3.5 rounded-lg border border-slate-700">
+          <div class="flex items-center justify-between border-b border-slate-700/60 pb-1.5">
+            <span class="text-xs font-bold text-slate-200">상세 설정 조절 (실시간 캔버스 반영)</span>
+            <span class="text-[10px] text-indigo-400 font-medium">조절 시 화면에 즉시 적용</span>
+          </div>
+
+          <!-- 그림자 농도 -->
+          <div>
+            <div class="flex justify-between text-xs text-slate-300 mb-1">
+              <span>그림자 농도 (진하기)</span>
+              <span id="valDescShadowOpacity" class="font-mono text-indigo-400 font-semibold">50%</span>
+            </div>
+            <input type="range" id="sliderDescShadowOpacity" min="10" max="100" value="50" class="w-full accent-indigo-500 cursor-pointer">
+          </div>
+
+          <!-- 그림자 크기 -->
+          <div>
+            <div class="flex justify-between text-xs text-slate-300 mb-1">
+              <span>그림자 크기 (부드러운 퍼짐)</span>
+              <span id="valDescShadowBlur" class="font-mono text-indigo-400 font-semibold">10px</span>
+            </div>
+            <input type="range" id="sliderDescShadowBlur" min="0" max="40" value="10" class="w-full accent-indigo-500 cursor-pointer">
+          </div>
+
+          <!-- 그림자 방향 -->
+          <div>
+            <div class="flex justify-between text-xs text-slate-300 mb-1">
+              <span>그림자 방향 (각도)</span>
+              <span id="valDescShadowAngle" class="font-mono text-indigo-400 font-semibold">135°</span>
+            </div>
+            <input type="range" id="sliderDescShadowAngle" min="0" max="360" value="135" class="w-full accent-indigo-500 cursor-pointer">
+          </div>
+
+          <!-- 글자와 그림자 거리 -->
+          <div>
+            <div class="flex justify-between text-xs text-slate-300 mb-1">
+              <span>글자와 그림자 거리</span>
+              <span id="valDescShadowDistance" class="font-mono text-indigo-400 font-semibold">5px</span>
+            </div>
+            <input type="range" id="sliderDescShadowDistance" min="0" max="50" value="5" class="w-full accent-indigo-500 cursor-pointer">
+          </div>
+
+          <!-- 그림자 색상 -->
+          <div class="flex items-center justify-between text-xs text-slate-300 pt-1 border-t border-slate-700/60">
+            <span>그림자 색상</span>
+            <input type="color" id="descShadowColorPicker" value="#000000" class="w-6 h-6 border-0 rounded cursor-pointer">
+          </div>
+        </div>
+
+        <!-- 하단 액션 버튼 -->
+        <div class="flex space-x-2 pt-1">
+          <button id="btnCancelDescModal" class="px-3.5 py-2 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-300">취소</button>
+          <button id="btnSaveAndApplyFromDescModal" class="flex-1 py-2 text-xs font-bold rounded bg-indigo-600 hover:bg-indigo-500 text-white shadow-md flex items-center justify-center space-x-1 transition">
+            <span>💾 프리셋 저장 및 글씨에 적용</span>
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- 알림 토스트 팝업 -->
+  <div id="toastNotification" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900/95 text-white px-4 py-2.5 rounded-full text-xs font-semibold shadow-2xl backdrop-blur-sm border border-slate-700 transition-all duration-300 opacity-0 pointer-events-none z-[9999999] flex items-center space-x-2">
+    <span id="toastMessage">알림</span>
+  </div>
+
+  <!-- 메인 애플리케이션 스크립트 -->
+  <script>
+    // --- 1. 전역 상태 및 Fabric.js 인스턴스 초기화 ---
+    const canvasEl = document.getElementById('mainCanvas');
+    const wrapper = document.getElementById('canvasWrapper');
+
+    // 기본 가상 캔버스 해상도
+    let canvasWidth = 800;
+    let canvasHeight = 600;
+
+    const canvas = new fabric.Canvas('mainCanvas', {
+      width: canvasWidth,
+      height: canvasHeight,
+      backgroundColor: '#f8fafc',
+      preserveObjectStacking: true,
+      selection: false
+    });
+
+    // 상태 저장 변수
+    let bgFabricImg = null;       // 배경 Fabric 이미지 객체
+    let textLayers = [];          // 여러 개 등록 가능한 글씨 객체 리스트 [{ id, fabricObj, rawImg, croppedCanvas, cleanedCanvas, name }]
+    let activeLayerId = null;     // 현재 선택되어 수정 중인 글씨 레이어 ID
+    let layerCounter = 0;         // 고유 레이어 번호 부여용
+    let rawBgImg = null;          // 원본 배경 이미지
+
+    // 현재 스타일 값 (초기 선언 누락 수정!)
+    let currentTextColor = '#000000';
+    let currentOpacity = 1.0;
+    let hasShadow = false;
+
+    // 그림자 세부 상태 (초기 선언 누락 수정!)
+    let shadowOpacity = 0.5;
+    let shadowBlur = 10;
+    let shadowAngle = 135;
+    let shadowDistance = 5;
+    let shadowColor = '#000000';
+
+    // 화면 하단 알림 토스트 헬퍼
+    let toastTimer = null;
+    function showToast(msg) {
+      const toast = document.getElementById('toastNotification');
+      const txt = document.getElementById('toastMessage');
+      if (!toast || !txt) return;
+      txt.innerText = msg;
+      toast.classList.remove('opacity-0', 'pointer-events-none');
+      toast.classList.add('opacity-100');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        toast.classList.remove('opacity-100');
+        toast.classList.add('opacity-0', 'pointer-events-none');
+      }, 2500);
+    }
+
+    // 현재 활성화된 레이어 객체 구하기
+    function getActiveLayer() {
+      return textLayers.find(l => l.id === activeLayerId) || null;
+    }
+
+    // 상단 툴바 및 스타일 패널 선택 인디케이터 갱신
+    function updateSelectionIndicators() {
+      const active = getActiveLayer();
+      const badge = document.getElementById('canvasSelectedBadge');
+      const ind = document.getElementById('activeLayerIndicator');
+      if (active && canvas.getActiveObject() === active.fabricObj) {
+        if (badge) {
+          badge.innerText = `선택: ${active.name}`;
+          badge.className = 'px-2 py-1 bg-indigo-600 text-white font-bold rounded text-[11px] shadow-sm';
+        }
+        if (ind) ind.innerText = `(${active.name})`;
+      } else {
+        if (badge) {
+          badge.innerText = '선택: 없음';
+          badge.className = 'px-2 py-1 bg-slate-100 text-slate-500 font-medium rounded text-[11px] border border-slate-200';
+        }
+        if (ind) ind.innerText = '';
+      }
+    }
+
+    // 회전 슬라이더 및 각도 동기화
+    function syncTransformControls() {
+      const active = getActiveLayer();
+      if (!active || !active.fabricObj) return;
+      const ang = Math.round(((active.fabricObj.angle || 0) % 360 + 360) % 360);
+      const sliderAngle = document.getElementById('sliderAngle');
+      const valAngle = document.getElementById('valAngle');
+      if (sliderAngle) sliderAngle.value = ang;
+      if (valAngle) valAngle.innerText = `${ang}°`;
+    }
+
+    // 활성 레이어의 저장된 스타일 및 설정값을 UI 컨트롤에 동기화
+    function syncControlsToActiveLayer() {
+      const active = getActiveLayer();
+      if (!active) return;
+
+      // 1. 임계값 슬라이더 동기화
+      const spCut = document.getElementById('sliderPaperCut');
+      const vpCut = document.getElementById('valPaperCut');
+      const siBoost = document.getElementById('sliderInkBoost');
+      const viBoost = document.getElementById('valInkBoost');
+      if (spCut && active.paperCut !== undefined) {
+        spCut.value = active.paperCut;
+        if (vpCut) vpCut.innerText = active.paperCut;
+      }
+      if (siBoost && active.inkBoost !== undefined) {
+        siBoost.value = active.inkBoost;
+        if (viBoost) viBoost.innerText = active.inkBoost;
+      }
+
+      // 2. 색상 및 불투명도 동기화
+      if (active.textColor) {
+        currentTextColor = active.textColor;
+        const cp = document.getElementById('customColorPicker');
+        if (cp) cp.value = active.textColor;
+        document.querySelectorAll('.color-chip').forEach(c => {
+          if (c.dataset.color && c.dataset.color.toLowerCase() === active.textColor.toLowerCase()) {
+            c.classList.add('border-indigo-600', 'border-2');
+          } else {
+            c.classList.remove('border-indigo-600', 'border-2');
+          }
+        });
+      }
+      if (active.opacity !== undefined) {
+        currentOpacity = active.opacity;
+        const sOp = document.getElementById('sliderOpacity');
+        const vOp = document.getElementById('valOpacity');
+        if (sOp) sOp.value = Math.round(active.opacity * 100);
+        if (vOp) vOp.innerText = `${Math.round(active.opacity * 100)}%`;
+      }
+
+      // 3. 그림자 설정 동기화
+      if (active.hasShadow !== undefined) {
+        hasShadow = active.hasShadow;
+        const chk = document.getElementById('chkShadow');
+        const sCtrl = document.getElementById('shadowControls');
+        if (chk) chk.checked = hasShadow;
+        if (sCtrl) {
+          if (hasShadow) sCtrl.classList.remove('hidden');
+          else sCtrl.classList.add('hidden');
+        }
+      }
+      if (active.shadowOpacity !== undefined) {
+        shadowOpacity = active.shadowOpacity;
+        const sShOp = document.getElementById('sliderShadowOpacity');
+        const vShOp = document.getElementById('valShadowOpacity');
+        if (sShOp) sShOp.value = Math.round(shadowOpacity * 100);
+        if (vShOp) vShOp.innerText = `${Math.round(shadowOpacity * 100)}%`;
+      }
+      if (active.shadowBlur !== undefined) {
+        shadowBlur = active.shadowBlur;
+        const sShBlur = document.getElementById('sliderShadowBlur');
+        const vShBlur = document.getElementById('valShadowBlur');
+        if (sShBlur) sShBlur.value = shadowBlur;
+        if (vShBlur) vShBlur.innerText = `${shadowBlur}px`;
+      }
+      if (active.shadowAngle !== undefined) {
+        shadowAngle = active.shadowAngle;
+        const sShAng = document.getElementById('sliderShadowAngle');
+        const vShAng = document.getElementById('valShadowAngle');
+        if (sShAng) sShAng.value = shadowAngle;
+        if (vShAng) vShAng.innerText = `${shadowAngle}°`;
+      }
+      if (active.shadowDistance !== undefined) {
+        shadowDistance = active.shadowDistance;
+        const sShDist = document.getElementById('sliderShadowDistance');
+        const vShDist = document.getElementById('valShadowDistance');
+        if (sShDist) sShDist.value = shadowDistance;
+        if (vShDist) vShDist.innerText = `${shadowDistance}px`;
+      }
+      if (active.shadowColor) {
+        shadowColor = active.shadowColor;
+        const sShCol = document.getElementById('shadowColorPicker');
+        if (sShCol) sShCol.value = shadowColor;
+      }
+
+      syncTransformControls();
+      updateSelectionIndicators();
+    }
+
+    // Fabric 상에서 선택된 레이어 자동 동기화
+    canvas.on('selection:created', (e) => onFabricSelected(e));
+    canvas.on('selection:updated', (e) => onFabricSelected(e));
+    canvas.on('selection:cleared', () => updateSelectionIndicators());
+    canvas.on('object:rotating', () => syncTransformControls());
+    canvas.on('object:modified', () => syncTransformControls());
+
+    function onFabricSelected(e) {
+      if (!e.selected || e.selected.length === 0) return;
+      const target = e.selected[0];
+      const match = textLayers.find(l => l.fabricObj === target);
+      if (match) {
+        if (match.id !== activeLayerId) {
+          activeLayerId = match.id;
+          renderLayerBadges();
+          syncControlsToActiveLayer();
+        } else {
+          syncTransformControls();
+        }
+        updateSelectionIndicators();
+      }
+    }
+
+    // 레이어 목록 뱃지 UI 갱신
+    function renderLayerBadges() {
+      const listEl = document.getElementById('layerBadgeList');
+      const countEl = document.getElementById('layerCount');
+      countEl.innerText = textLayers.length;
+
+      if (textLayers.length === 0) {
+        listEl.innerHTML = '<span class="text-[11px] text-slate-400">아직 추가된 글씨가 없습니다.</span>';
+        updateSelectionIndicators();
+        return;
+      }
+
+      listEl.innerHTML = '';
+      textLayers.forEach(l => {
+        const btn = document.createElement('button');
+        const isActive = l.id === activeLayerId;
+        btn.className = `px-2 py-0.5 text-xs rounded border transition flex items-center space-x-1 ${
+          isActive 
+            ? 'bg-indigo-600 text-white border-indigo-600 font-bold shadow-sm' 
+            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+        }`;
+        btn.innerHTML = `<span>✍️ ${l.name}</span>`;
+        btn.addEventListener('click', () => {
+          activeLayerId = l.id;
+          renderLayerBadges();
+          if (l.fabricObj) {
+            canvas.setActiveObject(l.fabricObj);
+            l.fabricObj.bringToFront();
+            canvas.renderAll();
+          } else {
+            processTextExtraction();
+          }
+          syncControlsToActiveLayer();
+          updateSelectionIndicators();
+        });
+        listEl.appendChild(btn);
+      });
+      updateSelectionIndicators();
+    }
+
+    // 선택 레이어 삭제 및 복원(Undo) 히스토리
+    let deletedLayersHistory = [];
+
+    function restoreDeletedLayer() {
+      if (deletedLayersHistory.length === 0) {
+        showToast('⚠️ 복원할 삭제된 레이어가 없습니다.');
+        return;
+      }
+      const restored = deletedLayersHistory.pop();
+      textLayers.push(restored);
+      activeLayerId = restored.id;
+      if (restored.fabricObj) {
+        canvas.add(restored.fabricObj);
+        restored.fabricObj.dirty = true;
+        canvas.setActiveObject(restored.fabricObj);
+        restored.fabricObj.bringToFront();
+      }
+      canvas.requestRenderAll();
+      renderLayerBadges();
+      syncControlsToActiveLayer();
+      updateSelectionIndicators();
+      showToast(`↩️ "${restored.name}" 레이어가 복원되었습니다.`);
+    }
+
+    const btnUndoDeleteLayer = document.getElementById('btnUndoDeleteLayer');
+    if (btnUndoDeleteLayer) {
+      btnUndoDeleteLayer.addEventListener('click', restoreDeletedLayer);
+    }
+
+    // 선택 레이어 삭제
+    document.getElementById('btnDeleteSelectedLayer').addEventListener('click', () => {
+      const active = getActiveLayer();
+      if (!active) {
+        alert('삭제할 글씨 레이어를 먼저 화면이나 목록에서 선택해 주세요.');
+        return;
+      }
+      deletedLayersHistory.push(active);
+      canvas.remove(active.fabricObj);
+      textLayers = textLayers.filter(l => l.id !== active.id);
+      activeLayerId = textLayers.length > 0 ? textLayers[textLayers.length - 1].id : null;
+      if (activeLayerId) {
+        const next = getActiveLayer();
+        if (next && next.fabricObj) canvas.setActiveObject(next.fabricObj);
+      }
+      canvas.requestRenderAll();
+      renderLayerBadges();
+      syncControlsToActiveLayer();
+      updateSelectionIndicators();
+      showToast(`🗑️ "${active.name}" 삭제됨 (Ctrl+Z 또는 [복원]으로 복구 가능)`);
+    });
+
+    // --- 2. 화면 크기 반응형 리사이즈 ---
+    function fitCanvasToScreen() {
+      if (!wrapper) return;
+      const wrapW = wrapper.clientWidth - 32;
+      const wrapH = wrapper.clientHeight - 32;
+      
+      const scale = Math.min(wrapW / canvasWidth, wrapH / canvasHeight, 1);
+      
+      canvasEl.parentElement.style.transform = `scale(${scale})`;
+      canvasEl.parentElement.style.transformOrigin = 'center center';
+    }
+    window.addEventListener('resize', fitCanvasToScreen);
+
+    // 그림자 객체 생성 헬퍼 (가장 먼저 선언하여 어디서든 안전하게 호출)
+    function buildFabricShadow() {
+      if (!hasShadow) return null;
+      const rad = (shadowAngle * Math.PI) / 180;
+      const offsetX = Math.round(Math.cos(rad) * shadowDistance);
+      const offsetY = Math.round(Math.sin(rad) * shadowDistance);
+
+      const r = parseInt(shadowColor.slice(1, 3), 16) || 0;
+      const g = parseInt(shadowColor.slice(3, 5), 16) || 0;
+      const b = parseInt(shadowColor.slice(5, 7), 16) || 0;
+      const rgba = `rgba(${r}, ${g}, ${b}, ${shadowOpacity})`;
+
+      return new fabric.Shadow({
+        color: rgba,
+        blur: shadowBlur,
+        offsetX: offsetX,
+        offsetY: offsetY
+      });
+    }
+
+    // --- 3. 핵심 알고리즘: Luminance-to-Alpha (글씨 배경 투명화 및 색상 덧입히기) ---
+    function processTextExtraction() {
+      const active = getActiveLayer();
+      if (!active) return;
+      processTextExtractionForLayer(active);
+    }
+
+    function processTextExtractionForLayer(targetLayer, initialTransform = null) {
+      if (!targetLayer) return;
+      const source = targetLayer.croppedCanvas || targetLayer.cleanedCanvas || targetLayer.rawImg;
+      if (!source) return;
+
+      const layerColor = targetLayer.textColor || currentTextColor;
+      const whiteThreshold = targetLayer.paperCut !== undefined ? targetLayer.paperCut : parseInt(document.getElementById('sliderPaperCut').value, 10);
+      const blackThreshold = targetLayer.inkBoost !== undefined ? targetLayer.inkBoost : parseInt(document.getElementById('sliderInkBoost').value, 10);
+
+      // 오프스크린 캔버스에서 픽셀 처리
+      const offCanvas = document.createElement('canvas');
+      const w = source.width || source.naturalWidth;
+      const h = source.height || source.naturalHeight;
+      if (!w || !h) return;
+
+      offCanvas.width = w;
+      offCanvas.height = h;
+      const ctx = offCanvas.getContext('2d');
+      ctx.drawImage(source, 0, 0);
+
+      const imgData = ctx.getImageData(0, 0, w, h);
+      const data = imgData.data;
+      const len = data.length;
+
+      // 목표 색상 파싱 (HEX -> RGB)
+      const targetR = parseInt(layerColor.slice(1, 3), 16) || 0;
+      const targetG = parseInt(layerColor.slice(3, 5), 16) || 0;
+      const targetB = parseInt(layerColor.slice(5, 7), 16) || 0;
+
+      // 픽셀 루프 고속 처리
+      for (let i = 0; i < len; i += 4) {
+        // 이미 투명한 픽셀(올가미로 잘라내어 구멍 난 영역)은 그대로 건너뜀
+        if (data[i + 3] === 0) continue;
+
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const brightness = 0.299 * r + 0.587 * g + 0.114 * b;
+
+        if (brightness >= whiteThreshold) {
+          data[i + 3] = 0;
+        } else if (brightness <= blackThreshold) {
+          data[i] = targetR;
+          data[i + 1] = targetG;
+          data[i + 2] = targetB;
+          // data[i + 3] 유지
+        } else {
+          const alphaRatio = (whiteThreshold - brightness) / (whiteThreshold - blackThreshold);
+          data[i] = targetR;
+          data[i + 1] = targetG;
+          data[i + 2] = targetB;
+          data[i + 3] = Math.min(data[i + 3], Math.floor(alphaRatio * 255));
+        }
+      }
+
+      ctx.putImageData(imgData, 0, 0);
+
+      targetLayer.paperCut = whiteThreshold;
+      targetLayer.inkBoost = blackThreshold;
+      targetLayer.textColor = layerColor;
+
+      updateFabricTextImageFromCanvasForLayer(targetLayer, offCanvas, initialTransform);
+    }
+
+    // Fabric 캔버스 위에 글씨 객체 배치/교체 (offCanvas 직접 전달 방식)
+    function updateFabricTextImageFromCanvas(offCanvas) {
+      const active = getActiveLayer();
+      if (!active) return;
+      updateFabricTextImageFromCanvasForLayer(active, offCanvas);
+    }
+
+    function updateFabricTextImageFromCanvasForLayer(layer, offCanvas, initialTransform = null) {
+      if (!layer) return;
+
+      const newImg = new fabric.Image(offCanvas);
+
+      let prevLeft = canvasWidth / 2;
+      let prevTop = canvasHeight / 2;
+      let prevScaleX = 1;
+      let prevScaleY = 1;
+      let prevAngle = 0;
+      let prevFlipX = false;
+      let prevFlipY = false;
+
+      if (initialTransform) {
+        prevLeft = initialTransform.left;
+        prevTop = initialTransform.top;
+        prevScaleX = initialTransform.scaleX !== undefined ? initialTransform.scaleX : 1;
+        prevScaleY = initialTransform.scaleY !== undefined ? initialTransform.scaleY : 1;
+        prevAngle = initialTransform.angle || 0;
+        prevFlipX = initialTransform.flipX || false;
+        prevFlipY = initialTransform.flipY || false;
+      } else if (layer.fabricObj && canvas.contains(layer.fabricObj)) {
+        // 기존 위치/크기/각도/반전 상태 그대로 계승
+        prevLeft = layer.fabricObj.left;
+        prevTop = layer.fabricObj.top;
+        prevScaleX = layer.fabricObj.scaleX;
+        prevScaleY = layer.fabricObj.scaleY;
+        prevAngle = layer.fabricObj.angle;
+        prevFlipX = layer.fabricObj.flipX || false;
+        prevFlipY = layer.fabricObj.flipY || false;
+        canvas.remove(layer.fabricObj);
+      } else {
+        // 최초 추가 시 화면에 딱 알맞은 크기로 자동 축소 맞춤
+        const targetW = canvasWidth * 0.55;
+        const targetH = canvasHeight * 0.55;
+        const scale = Math.min(targetW / offCanvas.width, targetH / offCanvas.height, 0.8);
+        prevScaleX = prevScaleY = (scale > 0.01) ? scale : 0.5;
+
+        // 여러 글씨가 겹치지 않게 살짝 오프셋
+        const offset = ((textLayers.length - 1) % 5) * 35;
+        prevLeft = canvasWidth / 2 + offset;
+        prevTop = canvasHeight / 2 + offset;
+      }
+
+      newImg.set({
+        left: prevLeft,
+        top: prevTop,
+        originX: 'center',
+        originY: 'center',
+        scaleX: prevScaleX,
+        scaleY: prevScaleY,
+        angle: prevAngle,
+        flipX: prevFlipX,
+        flipY: prevFlipY,
+        opacity: layer.opacity !== undefined ? layer.opacity : currentOpacity,
+        cornerColor: '#4f46e5',
+        cornerStrokeColor: '#ffffff',
+        cornerStyle: 'circle',
+        borderColor: '#6366f1',
+        borderScaleFactor: 2,
+        cornerSize: 14,
+        transparentCorners: false,
+        hasRotatingPoint: true,
+        rotatingPointOffset: 32,
+        centeredRotation: true,
+        perPixelTargetFind: true
+      });
+
+      // 레이어별 그림자 적용
+      if (layer.hasShadow) {
+        const rad = ((layer.shadowAngle || 135) * Math.PI) / 180;
+        const dist = layer.shadowDistance || 5;
+        const offsetX = Math.round(Math.cos(rad) * dist);
+        const offsetY = Math.round(Math.sin(rad) * dist);
+        const col = layer.shadowColor || '#000000';
+        const r = parseInt(col.slice(1, 3), 16) || 0;
+        const g = parseInt(col.slice(3, 5), 16) || 0;
+        const b = parseInt(col.slice(5, 7), 16) || 0;
+        const rgba = `rgba(${r}, ${g}, ${b}, ${layer.shadowOpacity !== undefined ? layer.shadowOpacity : 0.5})`;
+
+        newImg.set('shadow', new fabric.Shadow({
+          color: rgba,
+          blur: layer.shadowBlur !== undefined ? layer.shadowBlur : 10,
+          offsetX: offsetX,
+          offsetY: offsetY
+        }));
+      }
+
+      newImg.dirty = true;
+      layer.fabricObj = newImg;
+      canvas.add(newImg);
+      newImg.bringToFront();
+
+      if (layer.id === activeLayerId) {
+        canvas.setActiveObject(newImg);
+      }
+      canvas.requestRenderAll();
+
+      const guideEl = document.getElementById('emptyGuide');
+      if (guideEl) guideEl.classList.add('hidden');
+      renderLayerBadges();
+      syncTransformControls();
+      updateSelectionIndicators();
+    }
+
+    // --- 4. 파일 입력 처리 (배경 & 글씨) ---
+    document.getElementById('inputBg').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      document.getElementById('bgFileName').innerText = file.name;
+
+      const reader = new FileReader();
+      reader.onload = (f) => {
+        const img = new Image();
+        img.onload = () => {
+          rawBgImg = img;
+          
+          // 배경에 맞춰 캔버스 크기 재조정 (최대 1600px 안전 한도)
+          let targetW = img.width;
+          let targetH = img.height;
+          const maxSide = 1200;
+          if (targetW > maxSide || targetH > maxSide) {
+            const ratio = Math.min(maxSide / targetW, maxSide / targetH);
+            targetW = Math.round(targetW * ratio);
+            targetH = Math.round(targetH * ratio);
+          }
+
+          canvasWidth = targetW;
+          canvasHeight = targetH;
+          canvas.setWidth(canvasWidth);
+          canvas.setHeight(canvasHeight);
+
+          if (bgFabricImg) canvas.remove(bgFabricImg);
+          const fabricImg = new fabric.Image(img, {
+            left: 0,
+            top: 0,
+            scaleX: canvasWidth / img.width,
+            scaleY: canvasHeight / img.height,
+            selectable: false,
+            evented: false
+          });
+          bgFabricImg = fabricImg;
+          canvas.insertAt(bgFabricImg, 0); // 항상 맨 아래 레이어
+          fitCanvasToScreen();
+          canvas.renderAll();
+          document.getElementById('emptyGuide').classList.add('hidden');
+        };
+        img.src = f.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // 새 글씨 파일 추가 처리 (기존 글씨 보존하고 계속 추가)
+    document.getElementById('inputText').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      layerCounter++;
+      const layerName = file.name.length > 12 ? file.name.slice(0, 10) + '..' : file.name;
+      document.getElementById('textFileName').innerText = `+ ${layerName}`;
+
+      const reader = new FileReader();
+      reader.onload = (f) => {
+        const img = new Image();
+        img.onload = () => {
+          const newId = 'layer_' + Date.now() + '_' + layerCounter;
+          const newLayer = {
+            id: newId,
+            name: `글씨 ${textLayers.length + 1} (${layerName})`,
+            rawImg: img,
+            croppedCanvas: null,
+            cleanedCanvas: null,
+            fabricObj: null,
+            paperCut: 210,
+            inkBoost: 120,
+            textColor: currentTextColor,
+            opacity: currentOpacity,
+            hasShadow: hasShadow,
+            shadowOpacity: shadowOpacity,
+            shadowBlur: shadowBlur,
+            shadowAngle: shadowAngle,
+            shadowDistance: shadowDistance,
+            shadowColor: shadowColor
+          };
+          textLayers.push(newLayer);
+          activeLayerId = newId;
+
+          // 즉시 레이어 목록 뱃지 갱신 및 컨트롤 동기화
+          renderLayerBadges();
+          syncControlsToActiveLayer();
+
+          // 배경이 아직 없을 때 배경 크기가 없더라도 안전하게 기본 캔버스 확보
+          if (!bgFabricImg) {
+            fitCanvasToScreen();
+          }
+
+          // 글씨 추출 처리
+          processTextExtraction();
+          fitCanvasToScreen();
+
+          // 동일한 파일도 연속해서 다시 고를 수 있도록 값 리셋
+          e.target.value = '';
+        };
+        img.src = f.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // --- 5. 슬라이더 이벤트 연동 ---
+    const sliderPaperCut = document.getElementById('sliderPaperCut');
+    const sliderInkBoost = document.getElementById('sliderInkBoost');
+    const valPaperCut = document.getElementById('valPaperCut');
+    const valInkBoost = document.getElementById('valInkBoost');
+
+    sliderPaperCut.addEventListener('input', () => {
+      valPaperCut.innerText = sliderPaperCut.value;
+      const active = getActiveLayer();
+      if (active) active.paperCut = parseInt(sliderPaperCut.value, 10);
+      processTextExtraction();
+    });
+
+    sliderInkBoost.addEventListener('input', () => {
+      valInkBoost.innerText = sliderInkBoost.value;
+      const active = getActiveLayer();
+      if (active) active.inkBoost = parseInt(sliderInkBoost.value, 10);
+      processTextExtraction();
+    });
+
+    // --- 6. 나의 프리셋 관리 시스템 ---
+    let myPresets = [];
+
+    // 로컬 스토리지에서 프리셋 불러오기
+    function loadSavedPresets() {
+      try {
+        const saved = localStorage.getItem('wordoverlay_my_presets');
+        if (saved) {
+          myPresets = JSON.parse(saved);
+        } else {
+          // 기본 프리셋 샘플 2개
+          myPresets = [
+            { 
+              name: '부드러운 그림자', 
+              desc: '자연스러운 배경 사진에 잘 어울리는 은은하게 퍼지는 소프트 블랙 그림자 효과입니다.',
+              opacity: 0.5, blur: 12, angle: 135, distance: 6, color: '#000000' 
+            },
+            { 
+              name: '선명한 입체자막', 
+              desc: '복잡하거나 밝은 사진 위에서도 글씨가 또렷하게 분리되어 보이는 선명한 그림자 효과입니다.',
+              opacity: 0.8, blur: 4, angle: 135, distance: 4, color: '#000000' 
+            }
+          ];
+        }
+      } catch (e) {
+        myPresets = [];
+      }
+      renderMyPresetButtons();
+    }
+
+    // 프리셋 버튼 목록 렌더링
+    function renderMyPresetButtons() {
+      const container = document.getElementById('myPresetList');
+      if (!container) return;
+
+      if (myPresets.length === 0) {
+        container.innerHTML = '<span class="text-[11px] text-slate-400">등록된 프리셋이 없습니다.</span>';
+        return;
+      }
+
+      container.innerHTML = '';
+      myPresets.forEach((p, index) => {
+        const chip = document.createElement('div');
+        chip.className = 'flex items-center bg-white border border-slate-300 rounded overflow-hidden shadow-sm hover:border-indigo-500 transition group';
+        
+        // 프리셋 적용 버튼
+        const applyBtn = document.createElement('button');
+        applyBtn.className = 'py-1 px-2 text-[11px] text-slate-700 hover:text-indigo-600 font-medium flex items-center space-x-1';
+        applyBtn.innerHTML = `<span>🎨 ${p.name}</span>`;
+        applyBtn.title = '클릭 시 글씨에 적용';
+        applyBtn.addEventListener('click', () => applyPresetToCurrent(p));
+
+        // [설명] 버튼
+        const descBtn = document.createElement('button');
+        descBtn.className = 'px-1.5 py-1 text-[10px] text-indigo-600 hover:bg-indigo-50 border-l border-slate-200 transition font-medium';
+        descBtn.innerHTML = '설명';
+        descBtn.title = '프리셋 기능 설명 보기';
+        descBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openPresetDescModal(p);
+        });
+
+        // 삭제 버튼
+        const delBtn = document.createElement('button');
+        delBtn.className = 'px-1.5 py-1 text-[10px] text-slate-300 hover:text-rose-500 hover:bg-rose-50 border-l border-slate-200 transition';
+        delBtn.innerHTML = '✕';
+        delBtn.title = '이 프리셋 삭제';
+        delBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          deletePreset(index);
+        });
+
+        chip.appendChild(applyBtn);
+        chip.appendChild(descBtn);
+        chip.appendChild(delBtn);
+        container.appendChild(chip);
+      });
+    }
+
+    // 프리셋 상세 설명 모달 열기 및 실시간 조절 연동
+    let currentViewingPreset = null;
+
+    const sliderDescShadowOpacity = document.getElementById('sliderDescShadowOpacity');
+    const sliderDescShadowBlur = document.getElementById('sliderDescShadowBlur');
+    const sliderDescShadowAngle = document.getElementById('sliderDescShadowAngle');
+    const sliderDescShadowDistance = document.getElementById('sliderDescShadowDistance');
+    const descShadowColorPicker = document.getElementById('descShadowColorPicker');
+
+    const valDescShadowOpacity = document.getElementById('valDescShadowOpacity');
+    const valDescShadowBlur = document.getElementById('valDescShadowBlur');
+    const valDescShadowAngle = document.getElementById('valDescShadowAngle');
+    const valDescShadowDistance = document.getElementById('valDescShadowDistance');
+
+    function openPresetDescModal(p) {
+      currentViewingPreset = p;
+      document.getElementById('descModalTitle').innerText = `📖 ${p.name}`;
+      const descInput = document.getElementById('inputDescModalText');
+      if (descInput) descInput.value = p.desc || '';
+
+      const op = p.opacity !== undefined ? p.opacity : 0.5;
+      const bl = p.blur !== undefined ? p.blur : 10;
+      const ang = p.angle !== undefined ? p.angle : 135;
+      const dist = p.distance !== undefined ? p.distance : 5;
+      const col = p.color || '#000000';
+
+      sliderDescShadowOpacity.value = Math.round(op * 100);
+      valDescShadowOpacity.innerText = `${sliderDescShadowOpacity.value}%`;
+
+      sliderDescShadowBlur.value = bl;
+      valDescShadowBlur.innerText = `${bl}px`;
+
+      sliderDescShadowAngle.value = ang;
+      valDescShadowAngle.innerText = `${ang}°`;
+
+      sliderDescShadowDistance.value = dist;
+      valDescShadowDistance.innerText = `${dist}px`;
+
+      descShadowColorPicker.value = col;
+
+      // 모달 열 때 프리셋 스타일을 화면 글씨에 즉시 적용 (실시간 라이브 프리뷰 시작)
+      updateFromDescModalLive();
+
+      document.getElementById('presetDescModal').classList.remove('hidden');
+    }
+
+    // 모달 내 슬라이더 조절 시 캔버스 실시간 라이브 업데이트
+    function updateFromDescModalLive() {
+      let active = getActiveLayer();
+      if (!active && textLayers.length > 0) {
+        active = textLayers[textLayers.length - 1];
+        activeLayerId = active.id;
+        if (active.fabricObj) canvas.setActiveObject(active.fabricObj);
+        renderLayerBadges();
+      }
+      if (!active) return;
+
+      const op = parseInt(sliderDescShadowOpacity.value, 10) / 100;
+      const bl = parseInt(sliderDescShadowBlur.value, 10);
+      const ang = parseInt(sliderDescShadowAngle.value, 10);
+      const dist = parseInt(sliderDescShadowDistance.value, 10);
+      const col = descShadowColorPicker.value;
+
+      hasShadow = true;
+      shadowOpacity = op;
+      shadowBlur = bl;
+      shadowAngle = ang;
+      shadowDistance = dist;
+      shadowColor = col;
+
+      // 액티브 레이어에 반영
+      active.hasShadow = true;
+      active.shadowOpacity = op;
+      active.shadowBlur = bl;
+      active.shadowAngle = ang;
+      active.shadowDistance = dist;
+      active.shadowColor = col;
+
+      // 사이드바 슬라이더도 함께 동기화
+      const chk = document.getElementById('chkShadow');
+      const sCtrl = document.getElementById('shadowControls');
+      if (chk) chk.checked = true;
+      if (sCtrl) sCtrl.classList.remove('hidden');
+
+      const sShOp = document.getElementById('sliderShadowOpacity');
+      const vShOp = document.getElementById('valShadowOpacity');
+      if (sShOp) sShOp.value = Math.round(op * 100);
+      if (vShOp) vShOp.innerText = `${Math.round(op * 100)}%`;
+
+      const sShBlur = document.getElementById('sliderShadowBlur');
+      const vShBlur = document.getElementById('valShadowBlur');
+      if (sShBlur) sShBlur.value = bl;
+      if (vShBlur) vShBlur.innerText = `${bl}px`;
+
+      const sShAng = document.getElementById('sliderShadowAngle');
+      const vShAng = document.getElementById('valShadowAngle');
+      if (sShAng) sShAng.value = ang;
+      if (vShAng) vShAng.innerText = `${ang}°`;
+
+      const sShDist = document.getElementById('sliderShadowDistance');
+      const vShDist = document.getElementById('valShadowDistance');
+      if (sShDist) sShDist.value = dist;
+      if (vShDist) vShDist.innerText = `${dist}px`;
+
+      const sShCol = document.getElementById('shadowColorPicker');
+      if (sShCol) sShCol.value = col;
+
+      if (active.fabricObj) {
+        const rad = (ang * Math.PI) / 180;
+        const offsetX = Math.round(Math.cos(rad) * dist);
+        const offsetY = Math.round(Math.sin(rad) * dist);
+        const r = parseInt(col.slice(1, 3), 16) || 0;
+        const g = parseInt(col.slice(3, 5), 16) || 0;
+        const b = parseInt(col.slice(5, 7), 16) || 0;
+        const rgba = `rgba(${r}, ${g}, ${b}, ${op})`;
+
+        active.fabricObj.set('shadow', new fabric.Shadow({
+          color: rgba,
+          blur: bl,
+          offsetX: offsetX,
+          offsetY: offsetY
+        }));
+        active.fabricObj.dirty = true;
+        canvas.requestRenderAll();
+      }
+    }
+
+    // 모달 조절바 실시간 이벤트 리스너 등록
+    sliderDescShadowOpacity.addEventListener('input', () => {
+      valDescShadowOpacity.innerText = `${sliderDescShadowOpacity.value}%`;
+      updateFromDescModalLive();
+    });
+    sliderDescShadowBlur.addEventListener('input', () => {
+      valDescShadowBlur.innerText = `${sliderDescShadowBlur.value}px`;
+      updateFromDescModalLive();
+    });
+    sliderDescShadowAngle.addEventListener('input', () => {
+      valDescShadowAngle.innerText = `${sliderDescShadowAngle.value}°`;
+      updateFromDescModalLive();
+    });
+    sliderDescShadowDistance.addEventListener('input', () => {
+      valDescShadowDistance.innerText = `${sliderDescShadowDistance.value}px`;
+      updateFromDescModalLive();
+    });
+    descShadowColorPicker.addEventListener('input', () => {
+      updateFromDescModalLive();
+    });
+
+    // 닫기 및 취소
+    const closeDescModal = () => document.getElementById('presetDescModal').classList.add('hidden');
+    document.getElementById('btnCloseDescModal').addEventListener('click', closeDescModal);
+    document.getElementById('btnCancelDescModal').addEventListener('click', closeDescModal);
+
+    // [프리셋 저장 및 글씨에 적용] 버튼
+    document.getElementById('btnSaveAndApplyFromDescModal').addEventListener('click', () => {
+      if (currentViewingPreset) {
+        currentViewingPreset.opacity = parseInt(sliderDescShadowOpacity.value, 10) / 100;
+        currentViewingPreset.blur = parseInt(sliderDescShadowBlur.value, 10);
+        currentViewingPreset.angle = parseInt(sliderDescShadowAngle.value, 10);
+        currentViewingPreset.distance = parseInt(sliderDescShadowDistance.value, 10);
+        currentViewingPreset.color = descShadowColorPicker.value;
+
+        const descInput = document.getElementById('inputDescModalText');
+        if (descInput) currentViewingPreset.desc = descInput.value.trim();
+
+        try {
+          localStorage.setItem('wordoverlay_my_presets', JSON.stringify(myPresets));
+        } catch (e) {}
+
+        renderMyPresetButtons();
+        applyPresetToCurrent(currentViewingPreset);
+        closeDescModal();
+        showToast(`💾 "${currentViewingPreset.name}" 프리셋이 저장 및 적용되었습니다!`);
+      }
+    });
+
+    // 프리셋 삭제
+    function deletePreset(index) {
+      myPresets.splice(index, 1);
+      try {
+        localStorage.setItem('wordoverlay_my_presets', JSON.stringify(myPresets));
+      } catch (e) {}
+      renderMyPresetButtons();
+    }
+
+    // 프리셋 적용 로직
+    function applyPresetToCurrent(preset) {
+      let active = getActiveLayer();
+      if (!active && textLayers.length > 0) {
+        active = textLayers[textLayers.length - 1];
+        activeLayerId = active.id;
+        if (active.fabricObj) canvas.setActiveObject(active.fabricObj);
+        renderLayerBadges();
+      }
+      if (!active) {
+        showToast('⚠️ 적용할 글씨 레이어가 없습니다. 먼저 글씨 사진을 추가해 주세요.');
+        return;
+      }
+
+      hasShadow = true;
+      const chk = document.getElementById('chkShadow');
+      const sCtrl = document.getElementById('shadowControls');
+      if (chk) chk.checked = true;
+      if (sCtrl) sCtrl.classList.remove('hidden');
+
+      shadowOpacity = preset.opacity !== undefined ? preset.opacity : 0.5;
+      shadowBlur = preset.blur !== undefined ? preset.blur : 10;
+      shadowAngle = preset.angle !== undefined ? preset.angle : 135;
+      shadowDistance = preset.distance !== undefined ? preset.distance : 5;
+      shadowColor = preset.color || '#000000';
+
+      // 조절바 UI 동기화
+      const sShOp = document.getElementById('sliderShadowOpacity');
+      const vShOp = document.getElementById('valShadowOpacity');
+      if (sShOp) sShOp.value = Math.round(shadowOpacity * 100);
+      if (vShOp) vShOp.innerText = `${Math.round(shadowOpacity * 100)}%`;
+
+      const sShBlur = document.getElementById('sliderShadowBlur');
+      const vShBlur = document.getElementById('valShadowBlur');
+      if (sShBlur) sShBlur.value = shadowBlur;
+      if (vShBlur) vShBlur.innerText = `${shadowBlur}px`;
+
+      const sShAng = document.getElementById('sliderShadowAngle');
+      const vShAng = document.getElementById('valShadowAngle');
+      if (sShAng) sShAng.value = shadowAngle;
+      if (vShAng) vShAng.innerText = `${shadowAngle}°`;
+
+      const sShDist = document.getElementById('sliderShadowDistance');
+      const vShDist = document.getElementById('valShadowDistance');
+      if (sShDist) sShDist.value = shadowDistance;
+      if (vShDist) vShDist.innerText = `${shadowDistance}px`;
+
+      const sShCol = document.getElementById('shadowColorPicker');
+      if (sShCol) sShCol.value = shadowColor;
+
+      // 액티브 레이어 속성 저장
+      active.hasShadow = true;
+      active.shadowOpacity = shadowOpacity;
+      active.shadowBlur = shadowBlur;
+      active.shadowAngle = shadowAngle;
+      active.shadowDistance = shadowDistance;
+      active.shadowColor = shadowColor;
+
+      if (active.fabricObj) {
+        const rad = (shadowAngle * Math.PI) / 180;
+        const offsetX = Math.round(Math.cos(rad) * shadowDistance);
+        const offsetY = Math.round(Math.sin(rad) * shadowDistance);
+        const r = parseInt(shadowColor.slice(1, 3), 16) || 0;
+        const g = parseInt(shadowColor.slice(3, 5), 16) || 0;
+        const b = parseInt(shadowColor.slice(5, 7), 16) || 0;
+        const rgba = `rgba(${r}, ${g}, ${b}, ${shadowOpacity})`;
+
+        active.fabricObj.set('shadow', new fabric.Shadow({
+          color: rgba,
+          blur: shadowBlur,
+          offsetX: offsetX,
+          offsetY: offsetY
+        }));
+        active.fabricObj.dirty = true;
+        canvas.requestRenderAll();
+      }
+
+      showToast(`🎨 "${preset.name}" 프리셋이 [${active.name}]에 적용되었습니다!`);
+    }
+
+    // 프리셋 모달 열기/닫기 및 등록 로직
+    const presetModal = document.getElementById('presetModal');
+    const inputPresetName = document.getElementById('inputPresetName');
+    const inputPresetDesc = document.getElementById('inputPresetDesc');
+    const sliderModalShadowOpacity = document.getElementById('sliderModalShadowOpacity');
+    const sliderModalShadowBlur = document.getElementById('sliderModalShadowBlur');
+    const sliderModalShadowAngle = document.getElementById('sliderModalShadowAngle');
+    const sliderModalShadowDistance = document.getElementById('sliderModalShadowDistance');
+    const modalShadowColorPicker = document.getElementById('modalShadowColorPicker');
+
+    const valModalShadowOpacity = document.getElementById('valModalShadowOpacity');
+    const valModalShadowBlur = document.getElementById('valModalShadowBlur');
+    const valModalShadowAngle = document.getElementById('valModalShadowAngle');
+    const valModalShadowDistance = document.getElementById('valModalShadowDistance');
+
+    document.getElementById('btnOpenPresetModal').addEventListener('click', () => {
+      // 현재 스타일 & 변형 탭의 값으로 모달 초기화
+      inputPresetName.value = `나의 스타일 ${myPresets.length + 1}`;
+      inputPresetDesc.value = '';
+      sliderModalShadowOpacity.value = Math.round(shadowOpacity * 100);
+      valModalShadowOpacity.innerText = `${sliderModalShadowOpacity.value}%`;
+
+      sliderModalShadowBlur.value = shadowBlur;
+      valModalShadowBlur.innerText = `${shadowBlur}px`;
+
+      sliderModalShadowAngle.value = shadowAngle;
+      valModalShadowAngle.innerText = `${shadowAngle}°`;
+
+      sliderModalShadowDistance.value = shadowDistance;
+      valModalShadowDistance.innerText = `${shadowDistance}px`;
+
+      modalShadowColorPicker.value = shadowColor;
+
+      presetModal.classList.remove('hidden');
+    });
+
+    function closePresetModal() {
+      presetModal.classList.add('hidden');
+    }
+
+    document.getElementById('btnCancelPresetModal').addEventListener('click', closePresetModal);
+    document.getElementById('btnCancelPresetModal2').addEventListener('click', closePresetModal);
+
+    // 모달 슬라이더 실시간 수치 표시
+    sliderModalShadowOpacity.addEventListener('input', () => {
+      valModalShadowOpacity.innerText = `${sliderModalShadowOpacity.value}%`;
+    });
+    sliderModalShadowBlur.addEventListener('input', () => {
+      valModalShadowBlur.innerText = `${sliderModalShadowBlur.value}px`;
+    });
+    sliderModalShadowAngle.addEventListener('input', () => {
+      valModalShadowAngle.innerText = `${sliderModalShadowAngle.value}°`;
+    });
+    sliderModalShadowDistance.addEventListener('input', () => {
+      valModalShadowDistance.innerText = `${sliderModalShadowDistance.value}px`;
+    });
+
+    // 프리셋 저장 버튼 [설정] 클릭
+    document.getElementById('btnSavePresetModal').addEventListener('click', () => {
+      const name = inputPresetName.value.trim() || `프리셋 ${myPresets.length + 1}`;
+      const desc = inputPresetDesc.value.trim();
+      const newPreset = {
+        name: name,
+        desc: desc,
+        opacity: parseInt(sliderModalShadowOpacity.value, 10) / 100,
+        blur: parseInt(sliderModalShadowBlur.value, 10),
+        angle: parseInt(sliderModalShadowAngle.value, 10),
+        distance: parseInt(sliderModalShadowDistance.value, 10),
+        color: modalShadowColorPicker.value
+      };
+
+      myPresets.push(newPreset);
+      try {
+        localStorage.setItem('wordoverlay_my_presets', JSON.stringify(myPresets));
+      } catch (e) {}
+
+      renderMyPresetButtons();
+      closePresetModal();
+
+      // 저장과 동시에 현재 레이어에도 바로 적용
+      applyPresetToCurrent(newPreset);
+    });
+
+    // --- 7. 색상 및 스타일 컨트롤 ---
+    document.querySelectorAll('.color-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        document.querySelectorAll('.color-chip').forEach(c => c.classList.remove('border-indigo-600', 'border-2'));
+        chip.classList.add('border-indigo-600', 'border-2');
+        currentTextColor = chip.dataset.color;
+        const active = getActiveLayer();
+        if (active) active.textColor = currentTextColor;
+        processTextExtraction();
+      });
+    });
+
+    document.getElementById('customColorPicker').addEventListener('input', (e) => {
+      currentTextColor = e.target.value;
+      const active = getActiveLayer();
+      if (active) active.textColor = currentTextColor;
+      processTextExtraction();
+    });
+
+    const sliderOpacity = document.getElementById('sliderOpacity');
+    const valOpacity = document.getElementById('valOpacity');
+    sliderOpacity.addEventListener('input', () => {
+      currentOpacity = parseInt(sliderOpacity.value, 10) / 100;
+      valOpacity.innerText = `${sliderOpacity.value}%`;
+      applyStyleChangeToActive();
+    });
+
+    // 그림자 체크박스 및 세부 조절바 이벤트
+    const chkShadow = document.getElementById('chkShadow');
+    const shadowControls = document.getElementById('shadowControls');
+    const sliderShadowOpacity = document.getElementById('sliderShadowOpacity');
+    const sliderShadowBlur = document.getElementById('sliderShadowBlur');
+    const sliderShadowAngle = document.getElementById('sliderShadowAngle');
+    const sliderShadowDistance = document.getElementById('sliderShadowDistance');
+    const shadowColorPicker = document.getElementById('shadowColorPicker');
+
+    const valShadowOpacity = document.getElementById('valShadowOpacity');
+    const valShadowBlur = document.getElementById('valShadowBlur');
+    const valShadowAngle = document.getElementById('valShadowAngle');
+    const valShadowDistance = document.getElementById('valShadowDistance');
+
+    // 슬라이더 및 스타일 변경 시 실시간 반영 함수
+    function applyStyleChangeToActive() {
+      const active = getActiveLayer();
+      if (!active) return;
+
+      active.opacity = currentOpacity;
+      active.hasShadow = hasShadow;
+      active.shadowOpacity = shadowOpacity;
+      active.shadowBlur = shadowBlur;
+      active.shadowAngle = shadowAngle;
+      active.shadowDistance = shadowDistance;
+      active.shadowColor = shadowColor;
+
+      if (active.fabricObj) {
+        active.fabricObj.set('opacity', currentOpacity);
+        active.fabricObj.set('shadow', buildFabricShadow());
+        active.fabricObj.dirty = true;
+        canvas.requestRenderAll();
+      }
+    }
+
+    chkShadow.addEventListener('change', (e) => {
+      hasShadow = e.target.checked;
+      if (hasShadow) {
+        shadowControls.classList.remove('hidden');
+      } else {
+        shadowControls.classList.add('hidden');
+      }
+      applyStyleChangeToActive();
+    });
+
+    sliderShadowOpacity.addEventListener('input', () => {
+      shadowOpacity = parseInt(sliderShadowOpacity.value, 10) / 100;
+      valShadowOpacity.innerText = `${sliderShadowOpacity.value}%`;
+      applyStyleChangeToActive();
+    });
+
+    sliderShadowBlur.addEventListener('input', () => {
+      shadowBlur = parseInt(sliderShadowBlur.value, 10);
+      valShadowBlur.innerText = `${shadowBlur}px`;
+      applyStyleChangeToActive();
+    });
+
+    sliderShadowAngle.addEventListener('input', () => {
+      shadowAngle = parseInt(sliderShadowAngle.value, 10);
+      let desc = '';
+      if (shadowAngle >= 338 || shadowAngle < 23) desc = ' (우측)';
+      else if (shadowAngle < 68) desc = ' (우측 하단)';
+      else if (shadowAngle < 113) desc = ' (정하단)';
+      else if (shadowAngle < 158) desc = ' (좌측 하단)';
+      else if (shadowAngle < 203) desc = ' (좌측)';
+      else if (shadowAngle < 248) desc = ' (좌측 상단)';
+      else if (shadowAngle < 293) desc = ' (정상단)';
+      else desc = ' (우측 상단)';
+      valShadowAngle.innerText = `${shadowAngle}°${desc}`;
+      applyStyleChangeToActive();
+    });
+
+    sliderShadowDistance.addEventListener('input', () => {
+      shadowDistance = parseInt(sliderShadowDistance.value, 10);
+      valShadowDistance.innerText = `${shadowDistance}px`;
+      applyStyleChangeToActive();
+    });
+
+    shadowColorPicker.addEventListener('input', (e) => {
+      shadowColor = e.target.value;
+      applyStyleChangeToActive();
+    });
+
+    // --- 8. 글씨 변형 (회전, 반전, 정렬) 로직 및 이벤트 ---
+    function rotateActiveObject(deltaDeg) {
+      const active = getActiveLayer();
+      if (!active || !active.fabricObj) return;
+      const currentAng = active.fabricObj.angle || 0;
+      const newAngle = Math.round((currentAng + deltaDeg) % 360 + 360) % 360;
+      active.fabricObj.rotate(newAngle);
+      active.fabricObj.setCoords();
+      canvas.renderAll();
+      syncTransformControls();
+    }
+
+    function flipActiveObjectX() {
+      const active = getActiveLayer();
+      if (!active || !active.fabricObj) return;
+      const current = active.fabricObj.flipX || false;
+      active.fabricObj.set('flipX', !current);
+      active.fabricObj.setCoords();
+      canvas.renderAll();
+    }
+
+    function flipActiveObjectY() {
+      const active = getActiveLayer();
+      if (!active || !active.fabricObj) return;
+      const current = active.fabricObj.flipY || false;
+      active.fabricObj.set('flipY', !current);
+      active.fabricObj.setCoords();
+      canvas.renderAll();
+    }
+
+    function resetActiveTransform() {
+      const active = getActiveLayer();
+      if (active && active.fabricObj) {
+        active.fabricObj.center();
+        active.fabricObj.set({
+          scaleX: 1,
+          scaleY: 1,
+          angle: 0,
+          flipX: false,
+          flipY: false
+        });
+        active.fabricObj.setCoords();
+        canvas.renderAll();
+        syncTransformControls();
+      }
+    }
+
+    function centerActiveObject() {
+      const active = getActiveLayer();
+      if (active && active.fabricObj) {
+        active.fabricObj.center();
+        active.fabricObj.setCoords();
+        canvas.renderAll();
+      }
+    }
+
+    // 상단 툴바 및 스타일 패널 변형 버튼 연결
+    document.getElementById('btnTopRotate').addEventListener('click', () => rotateActiveObject(90));
+    document.getElementById('btnRotate90').addEventListener('click', () => rotateActiveObject(90));
+    document.getElementById('btnRotateMinus90').addEventListener('click', () => rotateActiveObject(-90));
+
+    document.getElementById('btnTopFlipX').addEventListener('click', flipActiveObjectX);
+    document.getElementById('btnFlipX').addEventListener('click', flipActiveObjectX);
+
+    document.getElementById('btnTopFlipY').addEventListener('click', flipActiveObjectY);
+    document.getElementById('btnFlipY').addEventListener('click', flipActiveObjectY);
+
+    document.getElementById('btnCenterText').addEventListener('click', centerActiveObject);
+    document.getElementById('btnResetTransform').addEventListener('click', resetActiveTransform);
+
+    // 회전 슬라이더 이벤트
+    const sliderAngle = document.getElementById('sliderAngle');
+    const valAngle = document.getElementById('valAngle');
+    if (sliderAngle) {
+      sliderAngle.addEventListener('input', () => {
+        const active = getActiveLayer();
+        if (active && active.fabricObj) {
+          const ang = parseInt(sliderAngle.value, 10);
+          if (valAngle) valAngle.innerText = `${ang}°`;
+          active.fabricObj.rotate(ang);
+          active.fabricObj.setCoords();
+          canvas.renderAll();
+        }
+      });
+    }
+
+    // Delete 키 및 Ctrl+Z 복원 단축키
+    window.addEventListener('keydown', (e) => {
+      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (e.key === 'Delete') {
+        const active = getActiveLayer();
+        if (active && canvas.getActiveObject() === active.fabricObj) {
+          document.getElementById('btnDeleteSelectedLayer').click();
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        restoreDeletedLayer();
+      }
+    });
+
+    // 마우스 휠 및 Ctrl+휠을 통한 글씨 확대/축소 및 캔버스 줌
+    wrapper.addEventListener('wheel', (opt) => {
+      const activeObj = canvas.getActiveObject();
+      
+      // 글씨 객체가 선택되어 있을 때 (Ctrl+휠 또는 일반 휠로 크기 조절)
+      if (activeObj) {
+        opt.preventDefault();
+        const delta = opt.deltaY;
+        let scaleFactor = delta > 0 ? 0.95 : 1.05;
+        let newScaleX = activeObj.scaleX * scaleFactor;
+        let newScaleY = activeObj.scaleY * scaleFactor;
+
+        // 최소 5% ~ 최대 10배 크기 제한
+        if (newScaleX > 0.05 && newScaleX < 10) {
+          activeObj.set({ scaleX: newScaleX, scaleY: newScaleY });
+          activeObj.setCoords();
+          canvas.renderAll();
+        }
+      }
+    }, { passive: false });
+
+    // 스마트폰/태블릿(Galaxy S24 Ultra, Tab) 터치 제스처: 두 손가락 핀치 줌 확대/축소
+    let touchStartDist = 0;
+    let initialObjScale = 1;
+
+    wrapper.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2) {
+        const activeObj = canvas.getActiveObject();
+        if (activeObj) {
+          e.preventDefault();
+          const dx = e.touches[0].clientX - e.touches[1].clientX;
+          const dy = e.touches[0].clientY - e.touches[1].clientY;
+          touchStartDist = Math.sqrt(dx * dx + dy * dy);
+          initialObjScale = activeObj.scaleX;
+        }
+      }
+    }, { passive: false });
+
+    wrapper.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 2 && touchStartDist > 0) {
+        const activeObj = canvas.getActiveObject();
+        if (activeObj) {
+          e.preventDefault();
+          const dx = e.touches[0].clientX - e.touches[1].clientX;
+          const dy = e.touches[0].clientY - e.touches[1].clientY;
+          const currentDist = Math.sqrt(dx * dx + dy * dy);
+          const ratio = currentDist / touchStartDist;
+          const newScale = initialObjScale * ratio;
+          if (newScale > 0.05 && newScale < 10) {
+            activeObj.set({ scaleX: newScale, scaleY: newScale });
+            activeObj.setCoords();
+            canvas.renderAll();
+          }
+        }
+      }
+    }, { passive: false });
+
+    wrapper.addEventListener('touchend', (e) => {
+      if (e.touches.length < 2) {
+        touchStartDist = 0;
+      }
+    });
+    // 탭 전환 버튼 선언 및 이벤트 연동
+    const tabBtnExtract = document.getElementById('tabBtnExtract');
+    const tabBtnStyle = document.getElementById('tabBtnStyle');
+    const tabContentExtract = document.getElementById('tabContentExtract');
+    const tabContentStyle = document.getElementById('tabContentStyle');
+
+    tabBtnExtract.addEventListener('click', () => {
+      tabBtnExtract.className = 'flex-1 py-2.5 px-3 border-b-2 border-indigo-600 text-indigo-600 bg-white font-semibold';
+      tabBtnStyle.className = 'flex-1 py-2.5 px-3 border-b-2 border-transparent text-slate-500 hover:text-slate-800';
+      tabContentExtract.classList.remove('hidden');
+      tabContentStyle.classList.add('hidden');
+    });
+
+    tabBtnStyle.addEventListener('click', () => {
+      tabBtnStyle.className = 'flex-1 py-2.5 px-3 border-b-2 border-indigo-600 text-indigo-600 bg-white font-semibold';
+      tabBtnExtract.className = 'flex-1 py-2.5 px-3 border-b-2 border-transparent text-slate-500 hover:text-slate-800';
+      tabContentStyle.classList.remove('hidden');
+      tabContentExtract.classList.add('hidden');
+    });
+
+    // --- 8. 크롭 모달 로직 (사각형 & 자유 올가미 크롭) ---
+    const cropModal = document.getElementById('cropModal');
+    const cropCanvas = document.getElementById('cropCanvas');
+    const cropCtx = cropCanvas.getContext('2d');
+    let cropMode = 'rect'; // 'rect' | 'lasso'
+    let isDrawingCrop = false;
+    let cropStart = { x: 0, y: 0 };
+    let cropCurrent = { x: 0, y: 0 };
+    let lassoPoints = [];
+
+    function getBaseTextSource() {
+      const active = getActiveLayer();
+      if (!active) return null;
+      return active.cleanedCanvas || active.rawImg;
+    }
+
+    function openCropModal(mode) {
+      const baseSource = getBaseTextSource();
+      if (!baseSource) {
+        alert('먼저 글씨 이미지를 불러오거나 선택해 주세요!');
+        return;
+      }
+      cropMode = mode;
+      document.getElementById('cropModalTitle').innerText = mode === 'rect' ? '🔲 사각형 크롭' : '✏️ 자유 올가미(Lasso) 크롭';
+      document.getElementById('cropModalDesc').innerText = mode === 'rect' 
+        ? '마우스나 펜으로 자를 영역을 드래그하세요.' 
+        : 'S펜이나 마우스로 글씨 둘레를 자유롭게 쓱 둘러 그리세요.';
+      
+      // 모달 캔버스 초기화
+      cropCanvas.width = baseSource.width;
+      cropCanvas.height = baseSource.height;
+      drawCropBase();
+      lassoPoints = [];
+      cropModal.classList.remove('hidden');
+    }
+
+    function drawCropBase() {
+      const baseSource = getBaseTextSource();
+      cropCtx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
+      if (baseSource) cropCtx.drawImage(baseSource, 0, 0);
+    }
+
+    document.getElementById('btnCropRect').addEventListener('click', () => openCropModal('rect'));
+    document.getElementById('btnCropLasso').addEventListener('click', () => openCropModal('lasso'));
+    document.getElementById('btnCancelCropModal').addEventListener('click', () => cropModal.classList.add('hidden'));
+
+    // 크롭 취소 및 원본 복원
+    document.getElementById('btnResetCrop').addEventListener('click', () => {
+      const active = getActiveLayer();
+      if (active) {
+        active.croppedCanvas = null;
+        active.cleanedCanvas = null;
+        processTextExtraction();
+      }
+    });
+
+    // 마우스/터치 위치 좌표 계산 (크롭용)
+    function getCanvasCoords(e) {
+      const rect = cropCanvas.getBoundingClientRect();
+      const scaleX = cropCanvas.width / rect.width;
+      const scaleY = cropCanvas.height / rect.height;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY
+      };
+    }
+
+    cropCanvas.addEventListener('mousedown', startCropDraw);
+    cropCanvas.addEventListener('touchstart', startCropDraw, { passive: false });
+
+    function startCropDraw(e) {
+      e.preventDefault();
+      isDrawingCrop = true;
+      const pos = getCanvasCoords(e);
+      cropStart = pos;
+      cropCurrent = pos;
+      if (cropMode === 'lasso') {
+        lassoPoints = [pos];
+      }
+    }
+
+    window.addEventListener('mousemove', moveCropDraw);
+    window.addEventListener('touchmove', moveCropDraw, { passive: false });
+
+    function moveCropDraw(e) {
+      if (!isDrawingCrop) return;
+      e.preventDefault();
+      const pos = getCanvasCoords(e);
+      cropCurrent = pos;
+
+      drawCropBase();
+
+      const baseSource = getBaseTextSource();
+      if (cropMode === 'rect') {
+        // 어두운 오버레이
+        cropCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+
+        // 선택 영역 밝게
+        const x = Math.min(cropStart.x, cropCurrent.x);
+        const y = Math.min(cropStart.y, cropCurrent.y);
+        const w = Math.abs(cropCurrent.x - cropStart.x);
+        const h = Math.abs(cropCurrent.y - cropStart.y);
+
+        if (baseSource) cropCtx.drawImage(baseSource, x, y, w, h, x, y, w, h);
+        cropCtx.strokeStyle = '#6366f1';
+        cropCtx.lineWidth = 3;
+        cropCtx.strokeRect(x, y, w, h);
+      } else if (cropMode === 'lasso') {
+        lassoPoints.push(pos);
+
+        // 경로 그리기
+        cropCtx.strokeStyle = '#f43f5e';
+        cropCtx.lineWidth = 3;
+        cropCtx.beginPath();
+        cropCtx.moveTo(lassoPoints[0].x, lassoPoints[0].y);
+        for (let i = 1; i < lassoPoints.length; i++) {
+          cropCtx.lineTo(lassoPoints[i].x, lassoPoints[i].y);
+        }
+        cropCtx.stroke();
+      }
+    }
+
+    window.addEventListener('mouseup', endCropDraw);
+    window.addEventListener('touchend', endCropDraw);
+
+    function endCropDraw() {
+      if (!isDrawingCrop) return;
+      isDrawingCrop = false;
+      if (cropMode === 'lasso' && lassoPoints.length > 2) {
+        cropCtx.closePath();
+        cropCtx.stroke();
+      }
+    }
+
+    // 1. 단순 크롭 적용 (이 영역만 남기고 나머지 잘라내기)
+    document.getElementById('btnApplyCropModal').addEventListener('click', () => {
+      const baseSource = getBaseTextSource();
+      if (!baseSource) return;
+
+      const outCanvas = document.createElement('canvas');
+      const outCtx = outCanvas.getContext('2d');
+
+      if (cropMode === 'rect') {
+        const x = Math.min(cropStart.x, cropCurrent.x);
+        const y = Math.min(cropStart.y, cropCurrent.y);
+        const w = Math.abs(cropCurrent.x - cropStart.x);
+        const h = Math.abs(cropCurrent.y - cropStart.y);
+
+        if (w < 10 || h < 10) {
+          alert('영역이 너무 작습니다. 다시 드래그해 주세요.');
+          return;
+        }
+
+        outCanvas.width = w;
+        outCanvas.height = h;
+        outCtx.drawImage(baseSource, x, y, w, h, 0, 0, w, h);
+      } else if (cropMode === 'lasso') {
+        if (lassoPoints.length < 3) {
+          alert('올가미 영역을 충분히 그려주세요.');
+          return;
+        }
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        lassoPoints.forEach(p => {
+          if (p.x < minX) minX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y > maxY) maxY = p.y;
+        });
+
+        const w = maxX - minX;
+        const h = maxY - minY;
+        outCanvas.width = w;
+        outCanvas.height = h;
+
+        outCtx.save();
+        outCtx.beginPath();
+        outCtx.moveTo(lassoPoints[0].x - minX, lassoPoints[0].y - minY);
+        for (let i = 1; i < lassoPoints.length; i++) {
+          outCtx.lineTo(lassoPoints[i].x - minX, lassoPoints[i].y - minY);
+        }
+        outCtx.closePath();
+        outCtx.clip();
+        outCtx.drawImage(baseSource, minX, minY, w, h, 0, 0, w, h);
+        outCtx.restore();
+      }
+
+      const active = getActiveLayer();
+      if (active) {
+        active.croppedCanvas = outCanvas;
+      }
+      cropModal.classList.add('hidden');
+      processTextExtraction();
+      showToast('🔲 선택 영역으로 크롭되었습니다.');
+    });
+
+    // 2. ★ 핵심 기능: 올가미 선택 영역을 새 레이어로 떼어내기 (Layer via Cut)
+    // 선택된 글씨는 독립 레이어가 되고, 원본 레이어에서는 그 자리가 투명하게 지워짐
+    document.getElementById('btnCutToNewLayer').addEventListener('click', () => {
+      const active = getActiveLayer();
+      if (!active) {
+        alert('선택된 글씨 레이어가 없습니다.');
+        return;
+      }
+      const baseSource = getBaseTextSource();
+      if (!baseSource) return;
+
+      // 1) 영역 바운딩 박스 계산
+      let minX, minY, maxX, maxY, w, h;
+      if (cropMode === 'rect') {
+        minX = Math.min(cropStart.x, cropCurrent.x);
+        minY = Math.min(cropStart.y, cropCurrent.y);
+        maxX = Math.max(cropStart.x, cropCurrent.x);
+        maxY = Math.max(cropStart.y, cropCurrent.y);
+        w = maxX - minX;
+        h = maxY - minY;
+        if (w < 10 || h < 10) {
+          alert('영역이 너무 작습니다. 떼어낼 글씨 영역을 다시 드래그해 주세요.');
+          return;
+        }
+      } else {
+        if (lassoPoints.length < 3) {
+          alert('올가미를 닫아 글씨 둘레를 충분히 그려주세요.');
+          return;
+        }
+        minX = Infinity; minY = Infinity; maxX = -Infinity; maxY = -Infinity;
+        lassoPoints.forEach(p => {
+          if (p.x < minX) minX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y > maxY) maxY = p.y;
+        });
+        w = Math.max(1, maxX - minX);
+        h = Math.max(1, maxY - minY);
+      }
+
+      // 2) 떼어낼 글씨(새 레이어) 캔버스 추출
+      const wordCanvas = document.createElement('canvas');
+      wordCanvas.width = w;
+      wordCanvas.height = h;
+      const wordCtx = wordCanvas.getContext('2d');
+
+      if (cropMode === 'lasso') {
+        wordCtx.save();
+        wordCtx.beginPath();
+        wordCtx.moveTo(lassoPoints[0].x - minX, lassoPoints[0].y - minY);
+        for (let i = 1; i < lassoPoints.length; i++) {
+          wordCtx.lineTo(lassoPoints[i].x - minX, lassoPoints[i].y - minY);
+        }
+        wordCtx.closePath();
+        wordCtx.clip();
+        wordCtx.drawImage(baseSource, minX, minY, w, h, 0, 0, w, h);
+        wordCtx.restore();
+      } else {
+        wordCtx.drawImage(baseSource, minX, minY, w, h, 0, 0, w, h);
+      }
+
+      // 3) 원본 레이어에서 떼어낸 영역을 투명하게 파내기 (destination-out)
+      const remainCanvas = document.createElement('canvas');
+      remainCanvas.width = baseSource.width;
+      remainCanvas.height = baseSource.height;
+      const remainCtx = remainCanvas.getContext('2d');
+      remainCtx.drawImage(baseSource, 0, 0);
+
+      remainCtx.save();
+      remainCtx.globalCompositeOperation = 'destination-out';
+      remainCtx.beginPath();
+      if (cropMode === 'lasso') {
+        remainCtx.moveTo(lassoPoints[0].x, lassoPoints[0].y);
+        for (let i = 1; i < lassoPoints.length; i++) {
+          remainCtx.lineTo(lassoPoints[i].x, lassoPoints[i].y);
+        }
+        remainCtx.closePath();
+      } else {
+        remainCtx.rect(minX, minY, w, h);
+      }
+      remainCtx.fill();
+      remainCtx.restore();
+
+      // 원본 레이어에 구멍 난 캔버스 할당
+      active.cleanedCanvas = remainCanvas;
+      active.croppedCanvas = null;
+
+      // 4) 원본 오브젝트의 현재 위치/각도/스케일/반전에 맞춰 떼어낸 글씨의 캔버스 상 좌표 계산
+      const origObj = active.fabricObj;
+      let newLeft = canvasWidth / 2;
+      let newTop = canvasHeight / 2;
+      let newScaleX = 1;
+      let newScaleY = 1;
+      let newAngle = 0;
+      let newFlipX = false;
+      let newFlipY = false;
+
+      if (origObj) {
+        newScaleX = origObj.scaleX || 1;
+        newScaleY = origObj.scaleY || 1;
+        newAngle = origObj.angle || 0;
+        newFlipX = origObj.flipX || false;
+        newFlipY = origObj.flipY || false;
+
+        const cx0 = baseSource.width / 2;
+        const cy0 = baseSource.height / 2;
+        const cxL = minX + w / 2;
+        const cyL = minY + h / 2;
+
+        let ox = (cxL - cx0) * (newFlipX ? -1 : 1);
+        let oy = (cyL - cy0) * (newFlipY ? -1 : 1);
+
+        const rad = (newAngle * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const scaledOx = ox * newScaleX;
+        const scaledOy = oy * newScaleY;
+
+        const canvasOffsetX = scaledOx * cos - scaledOy * sin;
+        const canvasOffsetY = scaledOx * sin + scaledOy * cos;
+
+        newLeft = origObj.left + canvasOffsetX;
+        newTop = origObj.top + canvasOffsetY;
+      }
+
+      // 5) 새 독립 레이어 객체 생성 및 등록
+      layerCounter++;
+      const newLayerId = 'layer_' + Date.now() + '_' + layerCounter;
+      const newLayer = {
+        id: newLayerId,
+        name: `글씨 ${textLayers.length + 1} (떼어냄)`,
+        rawImg: wordCanvas,
+        croppedCanvas: wordCanvas,
+        cleanedCanvas: null,
+        fabricObj: null,
+        paperCut: active.paperCut !== undefined ? active.paperCut : 210,
+        inkBoost: active.inkBoost !== undefined ? active.inkBoost : 120,
+        textColor: active.textColor || '#000000',
+        opacity: active.opacity !== undefined ? active.opacity : 1.0,
+        hasShadow: active.hasShadow !== undefined ? active.hasShadow : false,
+        shadowOpacity: active.shadowOpacity !== undefined ? active.shadowOpacity : 0.5,
+        shadowBlur: active.shadowBlur !== undefined ? active.shadowBlur : 10,
+        shadowAngle: active.shadowAngle !== undefined ? active.shadowAngle : 135,
+        shadowDistance: active.shadowDistance !== undefined ? active.shadowDistance : 5,
+        shadowColor: active.shadowColor || '#000000'
+      };
+      textLayers.push(newLayer);
+
+      // 6) 원본 레이어 재추출 (글씨가 빠진 구멍 뚫린 상태 반영)
+      processTextExtractionForLayer(active);
+
+      // 7) 새 레이어 추출 및 캔버스 등록
+      activeLayerId = newLayerId;
+      processTextExtractionForLayer(newLayer, {
+        left: newLeft,
+        top: newTop,
+        scaleX: newScaleX,
+        scaleY: newScaleY,
+        angle: newAngle,
+        flipX: newFlipX,
+        flipY: newFlipY
+      });
+
+      cropModal.classList.add('hidden');
+      renderLayerBadges();
+      syncControlsToActiveLayer();
+      updateSelectionIndicators();
+      showToast(`✂️ "${newLayer.name}" 레이어로 떼어냈습니다! 마우스로 자유롭게 이동/회전해 보세요.`);
+    });
+
+    // --- 8-2. 지우개 모달 로직 (Eraser Tool) ---
+    const eraserModal = document.getElementById('eraserModal');
+    const eraserCanvas = document.getElementById('eraserCanvas');
+    const eraserCtx = eraserCanvas.getContext('2d');
+    const sliderEraserSize = document.getElementById('sliderEraserSize');
+    const valEraserSize = document.getElementById('valEraserSize');
+    let eraserSize = 24;
+    let isErasing = false;
+    let eraserHistoryBuffer = null; // 초기 백업
+
+    sliderEraserSize.addEventListener('input', () => {
+      eraserSize = parseInt(sliderEraserSize.value, 10);
+      valEraserSize.innerText = eraserSize;
+    });
+
+    function openEraserModal() {
+      const active = getActiveLayer();
+      if (!active) {
+        alert('먼저 글씨 이미지를 불러오거나 선택해 주세요!');
+        return;
+      }
+      const source = active.croppedCanvas || active.cleanedCanvas || active.rawImg;
+      if (!source) {
+        alert('선택된 글씨 이미지가 없습니다.');
+        return;
+      }
+
+      eraserCanvas.width = source.width;
+      eraserCanvas.height = source.height;
+      
+      // 원본을 지우개 캔버스에 복사
+      eraserCtx.clearRect(0, 0, eraserCanvas.width, eraserCanvas.height);
+      eraserCtx.drawImage(source, 0, 0);
+
+      // 백업 캔버스 보관 (초기화용)
+      eraserHistoryBuffer = document.createElement('canvas');
+      eraserHistoryBuffer.width = source.width;
+      eraserHistoryBuffer.height = source.height;
+      eraserHistoryBuffer.getContext('2d').drawImage(source, 0, 0);
+
+      eraserModal.classList.remove('hidden');
+    }
+
+    document.getElementById('btnOpenEraser').addEventListener('click', openEraserModal);
+    document.getElementById('btnCancelEraserModal').addEventListener('click', () => eraserModal.classList.add('hidden'));
+
+    document.getElementById('btnResetEraserCanvas').addEventListener('click', () => {
+      if (!eraserHistoryBuffer) return;
+      eraserCtx.clearRect(0, 0, eraserCanvas.width, eraserCanvas.height);
+      eraserCtx.drawImage(eraserHistoryBuffer, 0, 0);
+    });
+
+    // 마우스/터치 위치 좌표 계산 (지우개용)
+    function getEraserCoords(e) {
+      const rect = eraserCanvas.getBoundingClientRect();
+      const scaleX = eraserCanvas.width / rect.width;
+      const scaleY = eraserCanvas.height / rect.height;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY
+      };
+    }
+
+    function eraseAt(x, y) {
+      eraserCtx.save();
+      // 종이 색(순백색)으로 덮어써서 픽셀을 제거(투명화 단계에서 자연스럽게 사라짐)
+      eraserCtx.fillStyle = '#ffffff';
+      eraserCtx.beginPath();
+      eraserCtx.arc(x, y, eraserSize / 2, 0, Math.PI * 2);
+      eraserCtx.fill();
+      eraserCtx.restore();
+    }
+
+    eraserCanvas.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      isErasing = true;
+      const pos = getEraserCoords(e);
+      eraseAt(pos.x, pos.y);
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isErasing) return;
+      const pos = getEraserCoords(e);
+      eraseAt(pos.x, pos.y);
+    });
+
+    window.addEventListener('mouseup', () => { isErasing = false; });
+
+    // 터치 지원 (S펜 / 모바일)
+    eraserCanvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      isErasing = true;
+      const pos = getEraserCoords(e);
+      eraseAt(pos.x, pos.y);
+    }, { passive: false });
+
+    eraserCanvas.addEventListener('touchmove', (e) => {
+      if (!isErasing) return;
+      e.preventDefault();
+      const pos = getEraserCoords(e);
+      eraseAt(pos.x, pos.y);
+    }, { passive: false });
+
+    eraserCanvas.addEventListener('touchend', () => { isErasing = false; });
+
+    // 지우개 완료 적용 및 닫기 처리
+    function applyEraserAction() {
+      const active = getActiveLayer();
+      if (!active) return;
+
+      const outCanvas = document.createElement('canvas');
+      outCanvas.width = eraserCanvas.width;
+      outCanvas.height = eraserCanvas.height;
+      outCanvas.getContext('2d').drawImage(eraserCanvas, 0, 0);
+
+      active.cleanedCanvas = outCanvas;
+      eraserModal.classList.add('hidden');
+      processTextExtraction();
+    }
+
+    document.getElementById('btnApplyEraserModal').addEventListener('click', applyEraserAction);
+
+    // --- 9. 결과물 저장 (최종 합성본 & 투명 PNG 스탬프) ---
+    // 합성 이미지 저장 (모든 레이어가 포함된 최종 고화질 이미지)
+    document.getElementById('btnExportMerged').addEventListener('click', () => {
+      if (!bgFabricImg && textLayers.length === 0) {
+        alert('저장할 이미지가 없습니다.');
+        return;
+      }
+      canvas.discardActiveObject();
+      canvas.renderAll();
+
+      const link = document.createElement('a');
+      link.download = `WordOverlay_Merged_${Date.now()}.png`;
+      link.href = canvas.toDataURL({ format: 'png', quality: 1.0 });
+      link.click();
+    });
+
+    // 투명 글씨 스탬프 단독 저장 (현재 선택된 글씨만 투명 PNG로 저장)
+    document.getElementById('btnSaveStamp').addEventListener('click', () => {
+      const active = getActiveLayer();
+      if (!active) {
+        alert('보관할 글씨 레이어를 먼저 선택해 주세요.');
+        return;
+      }
+      const source = active.croppedCanvas || active.cleanedCanvas || active.rawImg;
+      if (!source) return;
+
+      const offCanvas = document.createElement('canvas');
+      offCanvas.width = source.width;
+      offCanvas.height = source.height;
+      const ctx = offCanvas.getContext('2d');
+      ctx.drawImage(source, 0, 0);
+
+      const whiteThreshold = parseInt(sliderPaperCut.value, 10);
+      const blackThreshold = parseInt(sliderInkBoost.value, 10);
+      const imgData = ctx.getImageData(0, 0, offCanvas.width, offCanvas.height);
+      const data = imgData.data;
+
+      const targetR = parseInt(currentTextColor.slice(1, 3), 16);
+      const targetG = parseInt(currentTextColor.slice(3, 5), 16);
+      const targetB = parseInt(currentTextColor.slice(5, 7), 16);
+
+      for (let i = 0; i < data.length; i += 4) {
+        const brightness = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        if (brightness >= whiteThreshold) {
+          data[i + 3] = 0;
+        } else if (brightness <= blackThreshold) {
+          data[i] = targetR; data[i + 1] = targetG; data[i + 2] = targetB; data[i + 3] = 255;
+        } else {
+          const ratio = (whiteThreshold - brightness) / (whiteThreshold - blackThreshold);
+          data[i] = targetR; data[i + 1] = targetG; data[i + 2] = targetB;
+          data[i + 3] = Math.floor(ratio * 255);
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+
+      const link = document.createElement('a');
+      link.download = `Stamp_${active.name}_${Date.now()}.png`;
+      link.href = offCanvas.toDataURL('image/png');
+      link.click();
+    });
+
+    // 초기 화면 맞춤 및 저장된 프리셋 로드
+    fitCanvasToScreen();
+    loadSavedPresets();
+  </script>
+</body>
+</html>
