@@ -432,10 +432,17 @@
         <div class="space-y-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
           <div>
             <div class="flex justify-between text-xs text-slate-600 mb-1">
-              <span>글씨 불투명도</span>
+              <span>선택 레이어 투명도</span>
               <span id="valOpacity" class="font-mono text-indigo-600 font-semibold">100%</span>
             </div>
-            <input type="range" id="sliderOpacity" min="10" max="100" value="100" class="w-full accent-indigo-600 cursor-pointer">
+            <input type="range" id="sliderOpacity" min="0" max="100" value="100" class="w-full accent-indigo-600 cursor-pointer">
+          </div>
+          <div class="pt-2 border-t border-slate-200">
+            <div class="flex justify-between text-xs text-slate-600 mb-1">
+              <span>배경 사진 투명도</span>
+              <span id="valBgOpacity" class="font-mono text-indigo-600 font-semibold">100%</span>
+            </div>
+            <input type="range" id="sliderBgOpacity" min="0" max="100" value="100" class="w-full accent-indigo-600 cursor-pointer">
           </div>
         </div>
 
@@ -1011,6 +1018,7 @@
     let currentInkBoost = 120;
     let currentTextColor = '#000000';
     let currentOpacity = 1.0;
+    let bgOpacity = 1.0;
     let hasShadow = false;
 
     // 그림자 세부 상태
@@ -1758,6 +1766,7 @@
             top: 0,
             scaleX: canvasWidth / img.width,
             scaleY: canvasHeight / img.height,
+            opacity: bgOpacity,
             selectable: false,
             evented: false
           });
@@ -2441,6 +2450,19 @@
       valOpacity.innerText = `${sliderOpacity.value}%`;
       applyStyleChangeToActive();
     });
+
+    const sliderBgOpacity = document.getElementById('sliderBgOpacity');
+    const valBgOpacity = document.getElementById('valBgOpacity');
+    if (sliderBgOpacity && valBgOpacity) {
+      sliderBgOpacity.addEventListener('input', () => {
+        bgOpacity = parseInt(sliderBgOpacity.value, 10) / 100;
+        valBgOpacity.innerText = `${sliderBgOpacity.value}%`;
+        if (bgFabricImg) {
+          bgFabricImg.set('opacity', bgOpacity);
+          canvas.requestRenderAll();
+        }
+      });
+    }
 
     // 그림자 체크박스 및 세부 조절바 이벤트
     const chkShadow = document.getElementById('chkShadow');
