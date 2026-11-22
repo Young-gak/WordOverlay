@@ -223,7 +223,7 @@
                 </label>
                 <span class="text-[10px] text-slate-500 text-right leading-tight">최대 3개 저장<br>300KB 이내 권장</span>
               </div>
-              <p class="text-[10px] text-slate-500">파일 크기는 300KB 이내로 해 주세요. 저장된 로고를 누르면 캔버스에 올라갑니다.</p>
+              <p class="text-[10px] text-slate-500">파일 크기는 300KB 이내로 해 주세요. 클릭해 선택한 로고가 워터마크에 사용됩니다.</p>
               <div id="watermarkLogoPreviewList" class="grid grid-cols-3 gap-1.5 pt-1"></div>
             </div>
 
@@ -247,17 +247,30 @@
                   <button type="button" data-pos="bottom-right" class="watermark-pos-btn py-1 px-1.5 rounded text-[11px] font-medium border border-sky-500 bg-sky-600 text-white transition">우측 하단</button>
                 </div>
               </div>
+
+              <!-- 3) 작가 입력 (폰트 입력 연동 및 자동 저장) -->
+              <div class="pt-1">
+                <button id="btnWatermarkAuthor" type="button" class="w-full py-2 px-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md text-xs font-semibold text-emerald-800 transition flex items-center justify-between gap-1.5">
+                  <span class="shrink-0">✍️ 작가 입력</span>
+                  <span id="watermarkAuthorPreview" class="text-[10px] text-emerald-700 font-normal truncate">(미설정 · 폰트 입력 열기)</span>
+                </button>
+              </div>
+
               <button id="btnApplyWatermarkDate" type="button" class="w-full py-1.5 px-3 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-md shadow-sm transition">
-                ✅ 날짜를 캔버스에 올리기
+                ✅ 워터마크 캔버스에 올리기
               </button>
             </div>
 
-            <!-- 3) 작가 입력 (폰트 입력 연동) -->
-            <div class="flex items-center justify-between gap-2">
-              <button id="btnWatermarkAuthor" type="button" class="w-full py-2 px-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md text-xs font-semibold text-emerald-800 transition flex items-center justify-center space-x-1.5">
-                <span>✍️ 작가 입력</span>
-                <span class="text-[10px] text-emerald-600 font-normal">(폰트 입력 열기)</span>
-              </button>
+            <!-- 4) 워터마크 그룹 저장 및 불러오기 -->
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] font-bold text-slate-700">📦 워터마크 그룹</span>
+                <button id="btnSaveWatermarkGroup" type="button" class="px-2 py-1 bg-violet-100 hover:bg-violet-200 border border-violet-300 rounded text-[11px] font-semibold text-violet-800 transition">
+                  💾 현재 모습 저장
+                </button>
+              </div>
+              <p class="text-[10px] text-slate-500 leading-tight">배치·크기·폰트를 그룹으로 저장해 클릭 한 번으로 불러옵니다. (날짜는 오늘 날짜 자동 적용)</p>
+              <div id="watermarkGroupList" class="space-y-1 pt-0.5"></div>
             </div>
           </div>
 
@@ -3625,6 +3638,7 @@
       const btnLineHeightPlus = document.getElementById('btnLineHeightPlus');
 
       let editingLayerId = null; // null이면 새 레이어 추가, ID가 있으면 기존 레이어 수정
+      let authorSaveCallback = null; // 워터마크 작가 입력 저장 모드 콜백
       let modalState = {
         fontFamily: 'Malgun Gothic, 맑은 고딕, sans-serif',
         fontSize: 60,
@@ -3719,6 +3733,7 @@
       }
 
       function openFontModal(targetLayer = null) {
+        authorSaveCallback = null;
         if (targetLayer && targetLayer.type === 'font') {
           editingLayerId = targetLayer.id;
           fontModalTitle.innerText = `✏️ 폰트 텍스트 수정 (${targetLayer.name})`;
@@ -3754,8 +3769,29 @@
       }
 
       function closeFontModal() {
+        authorSaveCallback = null;
         fontModal.classList.add('hidden');
       }
+
+      window.openWatermarkAuthorFontModal = function (savedAuthor, onSave) {
+        editingLayerId = null;
+        authorSaveCallback = typeof onSave === 'function' ? onSave : null;
+        fontModalTitle.innerText = '✍️ 작가 이름 및 폰트 설정';
+        btnApplyFontInput.innerText = '💾 작가 정보 저장하기';
+        fontTextInput.value = (savedAuthor && savedAuthor.text) ? savedAuthor.text : '';
+        modalState = {
+          fontFamily: (savedAuthor && savedAuthor.fontFamily) || fontFamilySelect.value || 'Malgun Gothic, 맑은 고딕, sans-serif',
+          fontSize: (savedAuthor && savedAuthor.fontSize) || 60,
+          charSpacing: (savedAuthor && savedAuthor.charSpacing) ?? 0,
+          lineHeight: (savedAuthor && savedAuthor.lineHeight) || 1.2,
+          fontWeight: (savedAuthor && savedAuthor.fontWeight) || 'normal',
+          textAlign: (savedAuthor && savedAuthor.textAlign) || 'center',
+          textColor: (savedAuthor && savedAuthor.textColor) || currentTextColor || '#000000'
+        };
+        syncModalControls();
+        fontModal.classList.remove('hidden');
+        setTimeout(() => fontTextInput.focus(), 50);
+      };
 
       if (btnOpenFontInput) {
         btnOpenFontInput.addEventListener('click', () => openFontModal(null));
@@ -3931,6 +3967,22 @@
       // 5) 캔버스에 추가 / 수정 적용
       btnApplyFontInput.addEventListener('click', () => {
         const text = fontTextInput.value;
+        if (authorSaveCallback) {
+          const cb = authorSaveCallback;
+          cb({
+            text: text.trim(),
+            fontFamily: modalState.fontFamily,
+            fontSize: modalState.fontSize,
+            charSpacing: modalState.charSpacing,
+            lineHeight: modalState.lineHeight,
+            fontWeight: modalState.fontWeight,
+            textAlign: modalState.textAlign,
+            textColor: modalState.textColor
+          });
+          closeFontModal();
+          return;
+        }
+
         if (!text.trim()) {
           alert('텍스트를 입력해 주세요.');
           fontTextInput.focus();
@@ -4048,10 +4100,13 @@
     })();
 
     // ==========================================
-    // 워터마크 추가 패널 (로고 3개 저장 / 날짜 입력 / 작가 입력)
+    // 워터마크 추가 패널 (로고 3개 저장 / 날짜 입력 / 작가 입력 / 그룹 저장)
     // ==========================================
     (function initWatermarkPanel() {
       const LOGO_STORAGE_KEY = 'wordoverlay_watermark_logos';
+      const SELECTED_LOGO_STORAGE_KEY = 'wordoverlay_watermark_selected_logo';
+      const AUTHOR_STORAGE_KEY = 'wordoverlay_watermark_author';
+      const GROUP_STORAGE_KEY = 'wordoverlay_watermark_groups';
       const MAX_LOGOS = 3;
       const MAX_LOGO_BYTES = 300 * 1024; // 300KB
 
@@ -4068,8 +4123,14 @@
       const posButtons = document.querySelectorAll('.watermark-pos-btn');
       const btnApplyDate = document.getElementById('btnApplyWatermarkDate');
       const btnAuthor = document.getElementById('btnWatermarkAuthor');
+      const authorPreview = document.getElementById('watermarkAuthorPreview');
+      const btnSaveGroup = document.getElementById('btnSaveWatermarkGroup');
+      const groupListEl = document.getElementById('watermarkGroupList');
 
       let savedLogos = [];
+      let selectedLogoId = null;
+      let savedAuthor = null;
+      let savedGroups = [];
       let selectedDatePos = 'bottom-right';
 
       // 패널 열기/닫기
@@ -4080,14 +4141,33 @@
         });
       }
 
+      // 선택된 로고 ID 로드/저장
+      function persistSelectedLogoId() {
+        try {
+          if (selectedLogoId) {
+            localStorage.setItem(SELECTED_LOGO_STORAGE_KEY, selectedLogoId);
+          } else {
+            localStorage.removeItem(SELECTED_LOGO_STORAGE_KEY);
+          }
+        } catch (e) {}
+      }
+
       // 로고 목록 로드/저장
       function loadSavedLogos() {
         try {
           const raw = localStorage.getItem(LOGO_STORAGE_KEY);
           const parsed = raw ? JSON.parse(raw) : [];
           savedLogos = Array.isArray(parsed) ? parsed.slice(0, MAX_LOGOS) : [];
+          const storedId = localStorage.getItem(SELECTED_LOGO_STORAGE_KEY);
+          if (storedId && savedLogos.some(l => l.id === storedId)) {
+            selectedLogoId = storedId;
+          } else {
+            selectedLogoId = savedLogos[0] ? savedLogos[0].id : null;
+            persistSelectedLogoId();
+          }
         } catch (e) {
           savedLogos = [];
+          selectedLogoId = null;
         }
         renderLogoPreviews();
       }
@@ -4109,14 +4189,24 @@
         for (let i = 0; i < MAX_LOGOS; i++) {
           const logo = savedLogos[i];
           if (logo) {
+            const isSelected = logo.id === selectedLogoId;
             const slot = document.createElement('div');
-            slot.className = 'relative group h-16 bg-white border border-amber-200 hover:border-amber-400 rounded-md p-1 flex items-center justify-center cursor-pointer overflow-hidden transition';
-            slot.title = `${logo.name} (클릭하여 캔버스에 추가)`;
+            slot.className = isSelected
+              ? 'relative group h-16 bg-violet-50/60 border-2 border-violet-600 ring-2 ring-violet-300 rounded-md p-1 flex items-center justify-center cursor-pointer overflow-hidden transition'
+              : 'relative group h-16 bg-white border border-amber-200 hover:border-amber-400 rounded-md p-1 flex items-center justify-center cursor-pointer overflow-hidden transition';
+            slot.title = `${logo.name} (클릭하여 워터마크 로고로 선택)`;
 
             const img = document.createElement('img');
             img.src = logo.dataUrl;
             img.alt = logo.name;
             img.className = 'max-w-full max-h-full object-contain pointer-events-none';
+
+            if (isSelected) {
+              const badge = document.createElement('span');
+              badge.textContent = '✓';
+              badge.className = 'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-violet-600 text-white text-[9px] font-bold leading-none flex items-center justify-center pointer-events-none';
+              slot.appendChild(badge);
+            }
 
             const delBtn = document.createElement('button');
             delBtn.type = 'button';
@@ -4125,14 +4215,21 @@
             delBtn.className = 'absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-rose-500 hover:bg-rose-600 text-white text-[9px] leading-none flex items-center justify-center opacity-85 hover:opacity-100 transition';
             delBtn.addEventListener('click', (e) => {
               e.stopPropagation();
-              savedLogos.splice(i, 1);
+              const removed = savedLogos.splice(i, 1)[0];
+              if (removed && removed.id === selectedLogoId) {
+                selectedLogoId = savedLogos[0] ? savedLogos[0].id : null;
+                persistSelectedLogoId();
+              }
               persistSavedLogos();
               renderLogoPreviews();
               showToast('🗑️ 저장된 로고가 삭제되었습니다.');
             });
 
             slot.addEventListener('click', () => {
-              addStickerFromSrc(logo.dataUrl, logo.name, 0.22);
+              selectedLogoId = logo.id;
+              persistSelectedLogoId();
+              renderLogoPreviews();
+              showToast(`🖼️ "${logo.name}" 로고가 선택되었습니다.`);
             });
 
             slot.appendChild(img);
@@ -4166,14 +4263,17 @@
 
           const reader = new FileReader();
           reader.onload = (ev) => {
-            savedLogos.push({
+            const newLogo = {
               id: 'wm_logo_' + Date.now(),
               name: file.name,
               dataUrl: ev.target.result
-            });
+            };
+            savedLogos.push(newLogo);
             if (persistSavedLogos()) {
+              selectedLogoId = newLogo.id;
+              persistSelectedLogoId();
               renderLogoPreviews();
-              showToast(`💾 "${file.name}" 로고가 저장되었습니다.`);
+              showToast(`💾 "${file.name}" 로고가 저장 및 선택되었습니다.`);
             } else {
               savedLogos.pop();
             }
@@ -4229,120 +4329,593 @@
         });
       });
 
-      // 방법 A: 날짜를 바로 캔버스에 폰트 레이어로 올리기
-      if (btnApplyDate && inputDate) {
-        btnApplyDate.addEventListener('click', () => {
-          const text = inputDate.value.trim();
-          if (!text) {
-            alert('날짜를 입력하거나 [날짜 입력] 버튼을 눌러 주세요.');
-            inputDate.focus();
-            return;
+      // 작가 정보 로드/저장 및 UI 갱신
+      function updateAuthorPreviewUI() {
+        if (!authorPreview) return;
+        if (savedAuthor && savedAuthor.text) {
+          authorPreview.textContent = `저장됨: ${savedAuthor.text}`;
+          authorPreview.title = `${savedAuthor.text} (${savedAuthor.fontFamily || '기본 폰트'})`;
+        } else {
+          authorPreview.textContent = '(미설정 · 폰트 입력 열기)';
+          authorPreview.title = '';
+        }
+      }
+
+      function loadSavedAuthor() {
+        try {
+          const raw = localStorage.getItem(AUTHOR_STORAGE_KEY);
+          savedAuthor = raw ? JSON.parse(raw) : null;
+        } catch (e) {
+          savedAuthor = null;
+        }
+        updateAuthorPreviewUI();
+      }
+
+      function persistSavedAuthor() {
+        try {
+          if (savedAuthor && savedAuthor.text) {
+            localStorage.setItem(AUTHOR_STORAGE_KEY, JSON.stringify(savedAuthor));
+          } else {
+            localStorage.removeItem(AUTHOR_STORAGE_KEY);
           }
+        } catch (e) {
+          showToast('⚠️ 브라우저 저장 공간이 부족해 작가 정보를 저장할 수 없습니다.');
+        }
+      }
 
-          layerCounter++;
-          const newLayerId = 'font_layer_' + layerCounter + '_' + Date.now();
-          const shortName = text.length > 8 ? text.slice(0, 8) + '…' : text;
-          const defaultFontFamily = 'Malgun Gothic, 맑은 고딕, sans-serif';
-          const defaultFontSize = Math.max(18, Math.round(Math.min(canvasWidth, canvasHeight) * 0.04));
-          const textColor = currentTextColor || '#000000';
-
-          const textObj = new fabric.IText(text, {
-            left: canvasWidth / 2,
-            top: canvasHeight / 2,
-            originX: 'center',
-            originY: 'center',
-            fontFamily: defaultFontFamily,
-            fontSize: defaultFontSize,
-            charSpacing: 0,
-            lineHeight: 1.2,
-            fontWeight: 'normal',
-            textAlign: 'center',
-            fill: textColor,
-            opacity: currentOpacity,
-            shadowBoost: hasShadow ? Math.max(1, Math.ceil(shadowOpacity)) : 1,
-            shadowThickness: hasShadow ? shadowThickness : 0,
-            shadow: buildFabricShadow(),
-            cornerStyle: 'circle',
-            cornerColor: '#10b981',
-            borderColor: '#10b981',
-            transparentCorners: false
-          });
-          textObj.setControlsVisibility({ mt: false, mb: false });
-          textObj.initDimensions();
-
-          const maxW = canvasWidth * 0.9;
-          if (textObj.width > maxW) {
-            const ratio = maxW / (textObj.width || 1);
-            textObj.set('fontSize', Math.max(10, Math.floor(defaultFontSize * ratio)));
-            textObj.initDimensions();
+      if (btnAuthor) {
+        btnAuthor.addEventListener('click', () => {
+          if (typeof window.openWatermarkAuthorFontModal === 'function') {
+            window.openWatermarkAuthorFontModal(savedAuthor, (cfg) => {
+              savedAuthor = cfg && cfg.text ? cfg : null;
+              persistSavedAuthor();
+              updateAuthorPreviewUI();
+              if (savedAuthor && savedAuthor.text) {
+                showToast(`💾 작가 "${savedAuthor.text}" 정보가 저장되었습니다.`);
+              } else {
+                showToast('✍️ 저장된 작가 정보가 비워졌습니다.');
+              }
+            });
+          } else {
+            const fontBtn = document.getElementById('btnOpenFontInput');
+            if (fontBtn) fontBtn.click();
           }
-
-          const marginX = Math.max(20, Math.round(canvasWidth * 0.04));
-          const marginY = Math.max(20, Math.round(canvasHeight * 0.04));
-          const halfW = (textObj.width || 0) / 2;
-          const halfH = (textObj.height || 0) / 2;
-
-          let targetLeft = canvasWidth / 2;
-          if (selectedDatePos === 'bottom-left') {
-            targetLeft = marginX + halfW;
-          } else if (selectedDatePos === 'bottom-right') {
-            targetLeft = canvasWidth - marginX - halfW;
-          }
-          const targetTop = Math.max(halfH + 10, canvasHeight - marginY - halfH);
-
-          textObj.set({ left: targetLeft, top: targetTop });
-          textObj.setCoords();
-
-          const newLayer = {
-            id: newLayerId,
-            type: 'font',
-            name: shortName,
-            text: text,
-            fontFamily: defaultFontFamily,
-            fontSize: textObj.fontSize,
-            charSpacing: 0,
-            lineHeight: 1.2,
-            fontWeight: 'normal',
-            textAlign: 'center',
-            textColor: textColor,
-            opacity: currentOpacity,
-            hasShadow: hasShadow,
-            shadowOpacity: shadowOpacity,
-            shadowBlur: shadowBlur,
-            shadowThickness: shadowThickness,
-            shadowAngle: shadowAngle,
-            shadowDistance: shadowDistance,
-            shadowColor: shadowColor,
-            fabricObj: textObj
-          };
-
-          textLayers.push(newLayer);
-          activeLayerId = newLayer.id;
-
-          const guide = document.getElementById('emptyStateGuide');
-          if (guide) guide.classList.add('hidden');
-
-          canvas.add(textObj);
-          canvas.setActiveObject(textObj);
-          textObj.bringToFront();
-          canvas.requestRenderAll();
-
-          renderLayerBadges();
-          syncControlsToActiveLayer();
-          updateSelectionIndicators();
-          showToast(`📅 "${shortName}" 날짜가 추가되었습니다! (드래그로 이동·더블클릭으로 수정)`);
         });
       }
 
-      // 작가 입력 -> 기존 [폰트 입력] 모달 열기
-      if (btnAuthor) {
-        btnAuthor.addEventListener('click', () => {
-          const fontBtn = document.getElementById('btnOpenFontInput');
-          if (fontBtn) fontBtn.click();
+      // 워터마크 폰트 레이어 생성 헬퍼
+      function buildWatermarkFontLayer(text, opts = {}) {
+        layerCounter++;
+        const newLayerId = 'font_layer_' + layerCounter + '_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+        const firstLine = text.trim().split('\n')[0] || text;
+        const shortName = firstLine.length > 8 ? firstLine.slice(0, 8) + '…' : firstLine;
+        const fontFamily = opts.fontFamily || 'Malgun Gothic, 맑은 고딕, sans-serif';
+        const fontSize = opts.fontSize || Math.max(18, Math.round(Math.min(canvasWidth, canvasHeight) * 0.04));
+        const textColor = opts.textColor || currentTextColor || '#000000';
+        const opacity = opts.opacity ?? currentOpacity;
+        const charSpacing = opts.charSpacing ?? 0;
+        const lineHeight = opts.lineHeight || 1.2;
+        const fontWeight = opts.fontWeight || 'normal';
+        const textAlign = opts.textAlign || 'center';
+
+        const textObj = new fabric.IText(text, {
+          left: canvasWidth / 2,
+          top: canvasHeight / 2,
+          originX: 'center',
+          originY: 'center',
+          fontFamily,
+          fontSize,
+          charSpacing,
+          lineHeight,
+          fontWeight,
+          textAlign,
+          fill: textColor,
+          opacity,
+          scaleX: opts.scaleX ?? 1,
+          scaleY: opts.scaleY ?? 1,
+          angle: opts.angle ?? 0,
+          shadowBoost: (opts.hasShadow ?? hasShadow) ? Math.max(1, Math.ceil(opts.shadowOpacity ?? shadowOpacity)) : 1,
+          shadowThickness: (opts.hasShadow ?? hasShadow) ? (opts.shadowThickness ?? shadowThickness) : 0,
+          shadow: buildFabricShadow(),
+          cornerStyle: 'circle',
+          cornerColor: '#10b981',
+          borderColor: '#10b981',
+          transparentCorners: false
+        });
+        textObj.setControlsVisibility({ mt: false, mb: false });
+        textObj.initDimensions();
+
+        if (!opts.skipAutoFit) {
+          const maxW = canvasWidth * 0.9;
+          if (textObj.getScaledWidth() > maxW) {
+            const ratio = maxW / (textObj.getScaledWidth() || 1);
+            textObj.set('fontSize', Math.max(10, Math.floor(fontSize * ratio)));
+            textObj.initDimensions();
+          }
+        }
+
+        const newLayer = {
+          id: newLayerId,
+          type: 'font',
+          name: shortName,
+          text: text,
+          fontFamily,
+          fontSize: textObj.fontSize,
+          charSpacing,
+          lineHeight,
+          fontWeight,
+          textAlign,
+          textColor,
+          opacity,
+          hasShadow: opts.hasShadow ?? hasShadow,
+          shadowOpacity: opts.shadowOpacity ?? shadowOpacity,
+          shadowBlur: opts.shadowBlur ?? shadowBlur,
+          shadowThickness: opts.shadowThickness ?? shadowThickness,
+          shadowAngle: opts.shadowAngle ?? shadowAngle,
+          shadowDistance: opts.shadowDistance ?? shadowDistance,
+          shadowColor: opts.shadowColor ?? shadowColor,
+          watermarkRole: opts.watermarkRole || null,
+          fabricObj: textObj
+        };
+
+        return { textObj, newLayer };
+      }
+
+      function registerWatermarkLayers(createdItems) {
+        if (!createdItems.length) return;
+        const guide = document.getElementById('emptyStateGuide');
+        if (guide) guide.classList.add('hidden');
+
+        createdItems.forEach(({ fabricObj, layer }) => {
+          textLayers.push(layer);
+          activeLayerId = layer.id;
+          canvas.add(fabricObj);
+          fabricObj.bringToFront();
+        });
+
+        const lastObj = createdItems[createdItems.length - 1].fabricObj;
+        canvas.setActiveObject(lastObj);
+        canvas.requestRenderAll();
+
+        renderLayerBadges();
+        syncControlsToActiveLayer();
+        updateSelectionIndicators();
+      }
+
+      // [워터마크 캔버스에 올리기]: 로고 -> 날짜 -> 작가 이름 순으로 일괄 배치 (개별 레이어)
+      if (btnApplyDate && inputDate) {
+        btnApplyDate.addEventListener('click', () => {
+          const activeLogo = savedLogos.find(l => l.id === selectedLogoId) || savedLogos[0] || null;
+          const dateText = inputDate.value.trim();
+          const authorCfg = (savedAuthor && savedAuthor.text) ? savedAuthor : null;
+
+          if (!activeLogo && !dateText && !authorCfg) {
+            alert('로고, 날짜 또는 작가를 먼저 입력·선택해 주세요.');
+            return;
+          }
+
+          const placeAll = (loadedLogoImg) => {
+            const items = []; // 위에서 아래 순서: 로고 -> 날짜 -> 작가 이름
+
+            if (loadedLogoImg && activeLogo) {
+              layerCounter++;
+              const maxW = canvasWidth * 0.16;
+              const maxH = canvasHeight * 0.16;
+              const scale = Math.min(1, maxW / (loadedLogoImg.width || 1), maxH / (loadedLogoImg.height || 1));
+
+              const stickerObj = new fabric.Image(loadedLogoImg, {
+                left: canvasWidth / 2,
+                top: canvasHeight / 2,
+                originX: 'center',
+                originY: 'center',
+                scaleX: scale,
+                scaleY: scale,
+                opacity: currentOpacity,
+                shadowBoost: hasShadow ? Math.max(1, Math.ceil(shadowOpacity)) : 1,
+                shadowThickness: hasShadow ? shadowThickness : 0,
+                shadow: buildFabricShadow(),
+                cornerStyle: 'circle',
+                cornerColor: '#f59e0b',
+                borderColor: '#f59e0b',
+                transparentCorners: false
+              });
+
+              const baseName = (activeLogo.name || '').replace(/\.[^/.]+$/, '');
+              const layerName = baseName.length > 8 ? baseName.slice(0, 8) + '…' : baseName;
+              const logoLayer = {
+                id: 'sticker_layer_' + layerCounter + '_' + Date.now() + '_logo',
+                type: 'sticker',
+                name: layerName || '워터마크 로고',
+                rawImg: loadedLogoImg,
+                opacity: currentOpacity,
+                hasShadow,
+                shadowOpacity,
+                shadowBlur,
+                shadowThickness,
+                shadowAngle,
+                shadowDistance,
+                shadowColor,
+                watermarkRole: 'logo',
+                watermarkLogoId: activeLogo.id,
+                fabricObj: stickerObj
+              };
+              items.push({ fabricObj: stickerObj, layer: logoLayer });
+            }
+
+            if (dateText) {
+              const defaultDateSize = Math.max(18, Math.round(Math.min(canvasWidth, canvasHeight) * 0.04));
+              const { textObj, newLayer } = buildWatermarkFontLayer(dateText, {
+                fontFamily: 'Malgun Gothic, 맑은 고딕, sans-serif',
+                fontSize: defaultDateSize,
+                textColor: currentTextColor || '#000000',
+                watermarkRole: 'date'
+              });
+              items.push({ fabricObj: textObj, layer: newLayer });
+            }
+
+            if (authorCfg) {
+              const fallbackSize = Math.max(18, Math.round(Math.min(canvasWidth, canvasHeight) * 0.04));
+              const { textObj, newLayer } = buildWatermarkFontLayer(authorCfg.text, {
+                fontFamily: authorCfg.fontFamily,
+                fontSize: authorCfg.fontSize || fallbackSize,
+                charSpacing: authorCfg.charSpacing,
+                lineHeight: authorCfg.lineHeight,
+                fontWeight: authorCfg.fontWeight,
+                textAlign: authorCfg.textAlign,
+                textColor: authorCfg.textColor,
+                watermarkRole: 'author'
+              });
+              items.push({ fabricObj: textObj, layer: newLayer });
+            }
+
+            const marginX = Math.max(20, Math.round(canvasWidth * 0.04));
+            const marginY = Math.max(20, Math.round(canvasHeight * 0.04));
+            const gap = Math.max(6, Math.round(canvasHeight * 0.01));
+
+            let cursorBottom = canvasHeight - marginY;
+            for (let i = items.length - 1; i >= 0; i--) {
+              const obj = items[i].fabricObj;
+              const w = obj.getScaledWidth() || 0;
+              const h = obj.getScaledHeight() || 0;
+              const targetTop = Math.max(h / 2 + 10, cursorBottom - h / 2);
+
+              let targetLeft = canvasWidth / 2;
+              if (selectedDatePos === 'bottom-left') {
+                targetLeft = marginX + w / 2;
+              } else if (selectedDatePos === 'bottom-right') {
+                targetLeft = canvasWidth - marginX - w / 2;
+              }
+
+              obj.set({ left: targetLeft, top: targetTop });
+              obj.setCoords();
+              cursorBottom = targetTop - h / 2 - gap;
+            }
+
+            registerWatermarkLayers(items);
+            const names = [];
+            if (activeLogo) names.push('로고');
+            if (dateText) names.push('날짜');
+            if (authorCfg) names.push('작가');
+            showToast(`🏷️ 워터마크(${names.join('·')})가 캔버스에 올라갔습니다!`);
+          };
+
+          if (activeLogo) {
+            const img = new Image();
+            img.onload = () => placeAll(img);
+            img.onerror = () => placeAll(null);
+            img.src = activeLogo.dataUrl;
+          } else {
+            placeAll(null);
+          }
+        });
+      }
+
+      // 워터마크 그룹 저장 / 불러오기
+      function loadSavedGroups() {
+        try {
+          const raw = localStorage.getItem(GROUP_STORAGE_KEY);
+          const parsed = raw ? JSON.parse(raw) : [];
+          savedGroups = Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+          savedGroups = [];
+        }
+        renderGroupList();
+      }
+
+      function persistSavedGroups() {
+        try {
+          localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(savedGroups));
+          return true;
+        } catch (e) {
+          showToast('⚠️ 브라우저 저장 공간이 부족해 워터마크 그룹을 저장할 수 없습니다.');
+          return false;
+        }
+      }
+
+      function applySavedGroup(group) {
+        const minDim = Math.max(1, Math.min(canvasWidth, canvasHeight));
+        const logoSpec = group.logo || null;
+        const matchedLogo = logoSpec ? savedLogos.find(l => l.id === logoSpec.logoId) : null;
+
+        const runPlacement = (loadedImg) => {
+          const items = [];
+
+          if (logoSpec && loadedImg) {
+            layerCounter++;
+            const targetW = Math.max(16, (logoSpec.widthRatio || 0.14) * canvasWidth);
+            const scale = targetW / (loadedImg.width || 1);
+            const stickerObj = new fabric.Image(loadedImg, {
+              left: (logoSpec.leftRatio ?? 0.5) * canvasWidth,
+              top: (logoSpec.topRatio ?? 0.8) * canvasHeight,
+              originX: 'center',
+              originY: 'center',
+              scaleX: scale,
+              scaleY: scale,
+              angle: logoSpec.angle || 0,
+              opacity: logoSpec.opacity ?? currentOpacity,
+              shadowBoost: hasShadow ? Math.max(1, Math.ceil(shadowOpacity)) : 1,
+              shadowThickness: hasShadow ? shadowThickness : 0,
+              shadow: buildFabricShadow(),
+              cornerStyle: 'circle',
+              cornerColor: '#f59e0b',
+              borderColor: '#f59e0b',
+              transparentCorners: false
+            });
+            stickerObj.setCoords();
+
+            const baseName = (matchedLogo.name || logoSpec.logoName || '').replace(/\.[^/.]+$/, '');
+            const layerName = baseName.length > 8 ? baseName.slice(0, 8) + '…' : baseName;
+            items.push({
+              fabricObj: stickerObj,
+              layer: {
+                id: 'sticker_layer_' + layerCounter + '_' + Date.now() + '_glogo',
+                type: 'sticker',
+                name: layerName || '워터마크 로고',
+                rawImg: loadedImg,
+                opacity: logoSpec.opacity ?? currentOpacity,
+                hasShadow,
+                shadowOpacity,
+                shadowBlur,
+                shadowThickness,
+                shadowAngle,
+                shadowDistance,
+                shadowColor,
+                watermarkRole: 'logo',
+                watermarkLogoId: matchedLogo.id,
+                fabricObj: stickerObj
+              }
+            });
+          }
+
+          if (group.date) {
+            const todayText = getFormattedToday(Boolean(group.date.includeWeekday));
+            if (inputDate) inputDate.value = todayText;
+            const dSpec = group.date;
+            const { textObj, newLayer } = buildWatermarkFontLayer(todayText, {
+              fontFamily: dSpec.fontFamily,
+              fontSize: Math.max(10, Math.round((dSpec.fontSizeRatio || 0.04) * minDim)),
+              scaleX: dSpec.scaleX ?? 1,
+              scaleY: dSpec.scaleY ?? 1,
+              angle: dSpec.angle || 0,
+              charSpacing: dSpec.charSpacing ?? 0,
+              lineHeight: dSpec.lineHeight || 1.2,
+              fontWeight: dSpec.fontWeight || 'normal',
+              textAlign: dSpec.textAlign || 'center',
+              textColor: dSpec.textColor || '#000000',
+              opacity: dSpec.opacity ?? currentOpacity,
+              watermarkRole: 'date',
+              skipAutoFit: true
+            });
+            textObj.set({
+              left: (dSpec.leftRatio ?? 0.5) * canvasWidth,
+              top: (dSpec.topRatio ?? 0.85) * canvasHeight
+            });
+            textObj.setCoords();
+            items.push({ fabricObj: textObj, layer: newLayer });
+          }
+
+          if (group.author && group.author.text) {
+            const aSpec = group.author;
+            const { textObj, newLayer } = buildWatermarkFontLayer(aSpec.text, {
+              fontFamily: aSpec.fontFamily,
+              fontSize: Math.max(10, Math.round((aSpec.fontSizeRatio || 0.04) * minDim)),
+              scaleX: aSpec.scaleX ?? 1,
+              scaleY: aSpec.scaleY ?? 1,
+              angle: aSpec.angle || 0,
+              charSpacing: aSpec.charSpacing ?? 0,
+              lineHeight: aSpec.lineHeight || 1.2,
+              fontWeight: aSpec.fontWeight || 'normal',
+              textAlign: aSpec.textAlign || 'center',
+              textColor: aSpec.textColor || '#000000',
+              opacity: aSpec.opacity ?? currentOpacity,
+              watermarkRole: 'author',
+              skipAutoFit: true
+            });
+            textObj.set({
+              left: (aSpec.leftRatio ?? 0.5) * canvasWidth,
+              top: (aSpec.topRatio ?? 0.9) * canvasHeight
+            });
+            textObj.setCoords();
+            items.push({ fabricObj: textObj, layer: newLayer });
+          }
+
+          if (!items.length) {
+            showToast('⚠️ 불러올 워터마크 항목이 없습니다.');
+            return;
+          }
+
+          registerWatermarkLayers(items);
+          if (logoSpec && !matchedLogo) {
+            showToast(`📦 "${group.name}" 그룹 적용 완료! (저장된 로고가 삭제되어 로고는 제외됨)`);
+          } else {
+            showToast(`📦 "${group.name}" 워터마크 그룹이 적용되었습니다!`);
+          }
+        };
+
+        if (logoSpec && matchedLogo) {
+          const img = new Image();
+          img.onload = () => runPlacement(img);
+          img.onerror = () => runPlacement(null);
+          img.src = matchedLogo.dataUrl;
+        } else {
+          runPlacement(null);
+        }
+      }
+
+      function renderGroupList() {
+        if (!groupListEl) return;
+        groupListEl.innerHTML = '';
+        if (!savedGroups.length) {
+          const empty = document.createElement('p');
+          empty.className = 'text-[10px] text-slate-400 italic';
+          empty.textContent = '저장된 그룹이 없습니다.';
+          groupListEl.appendChild(empty);
+          return;
+        }
+
+        savedGroups.forEach((group, idx) => {
+          const row = document.createElement('div');
+          row.className = 'flex items-center justify-between gap-1 bg-white border border-violet-200 hover:border-violet-400 rounded-md px-2 py-1.5 transition';
+
+          const applyBtn = document.createElement('button');
+          applyBtn.type = 'button';
+          applyBtn.className = 'flex-1 text-left flex items-center justify-between gap-1 min-w-0';
+          const parts = [];
+          if (group.logo) parts.push('로고');
+          if (group.date) parts.push('날짜');
+          if (group.author) parts.push('작가');
+
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'text-xs font-semibold text-violet-900 truncate';
+          nameSpan.textContent = `🏷️ ${group.name}`;
+
+          const tagSpan = document.createElement('span');
+          tagSpan.className = 'text-[10px] text-slate-500 shrink-0';
+          tagSpan.textContent = parts.join('·');
+
+          applyBtn.appendChild(nameSpan);
+          applyBtn.appendChild(tagSpan);
+          applyBtn.addEventListener('click', () => applySavedGroup(group));
+
+          const delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.textContent = '✕';
+          delBtn.title = '그룹 삭제';
+          delBtn.className = 'ml-1 w-4 h-4 rounded-full text-[10px] text-slate-400 hover:text-white hover:bg-rose-500 flex items-center justify-center shrink-0 transition';
+          delBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            savedGroups.splice(idx, 1);
+            persistSavedGroups();
+            renderGroupList();
+            showToast(`🗑️ "${group.name}" 그룹이 삭제되었습니다.`);
+          });
+
+          row.appendChild(applyBtn);
+          row.appendChild(delBtn);
+          groupListEl.appendChild(row);
+        });
+      }
+
+      if (btnSaveGroup) {
+        btnSaveGroup.addEventListener('click', () => {
+          const findLatestRole = (role) => {
+            for (let i = textLayers.length - 1; i >= 0; i--) {
+              if (textLayers[i].watermarkRole === role && textLayers[i].fabricObj) {
+                return textLayers[i];
+              }
+            }
+            return null;
+          };
+
+          const logoLayer = findLatestRole('logo');
+          const dateLayer = findLatestRole('date');
+          const authorLayer = findLatestRole('author');
+
+          if (!logoLayer && !dateLayer && !authorLayer) {
+            alert('먼저 [워터마크 캔버스에 올리기]로 캔버스에 워터마크를 올려 주세요.');
+            return;
+          }
+
+          const rawName = prompt('저장할 워터마크 그룹 이름을 입력하세요:', '내 워터마크');
+          if (!rawName || !rawName.trim()) return;
+          const groupName = rawName.trim();
+          const minDim = Math.max(1, Math.min(canvasWidth, canvasHeight));
+
+          const groupData = {
+            id: 'wm_group_' + Date.now(),
+            name: groupName,
+            logo: null,
+            date: null,
+            author: null
+          };
+
+          if (logoLayer) {
+            const obj = logoLayer.fabricObj;
+            groupData.logo = {
+              logoId: logoLayer.watermarkLogoId || selectedLogoId || '',
+              logoName: logoLayer.name || '',
+              leftRatio: obj.left / canvasWidth,
+              topRatio: obj.top / canvasHeight,
+              widthRatio: obj.getScaledWidth() / canvasWidth,
+              angle: obj.angle || 0,
+              opacity: logoLayer.opacity ?? obj.opacity ?? 1
+            };
+          }
+
+          if (dateLayer) {
+            const obj = dateLayer.fabricObj;
+            const curText = obj.text || dateLayer.text || '';
+            groupData.date = {
+              includeWeekday: /[일월화수목금토]요일$/.test(curText.trim()),
+              leftRatio: obj.left / canvasWidth,
+              topRatio: obj.top / canvasHeight,
+              fontFamily: dateLayer.fontFamily || obj.fontFamily,
+              fontSizeRatio: (obj.fontSize || dateLayer.fontSize || 24) / minDim,
+              scaleX: obj.scaleX || 1,
+              scaleY: obj.scaleY || 1,
+              angle: obj.angle || 0,
+              charSpacing: dateLayer.charSpacing ?? obj.charSpacing ?? 0,
+              lineHeight: dateLayer.lineHeight ?? obj.lineHeight ?? 1.2,
+              fontWeight: dateLayer.fontWeight || obj.fontWeight || 'normal',
+              textAlign: dateLayer.textAlign || obj.textAlign || 'center',
+              textColor: dateLayer.textColor || obj.fill || '#000000',
+              opacity: dateLayer.opacity ?? obj.opacity ?? 1
+            };
+          }
+
+          if (authorLayer) {
+            const obj = authorLayer.fabricObj;
+            groupData.author = {
+              text: obj.text || authorLayer.text || '',
+              leftRatio: obj.left / canvasWidth,
+              topRatio: obj.top / canvasHeight,
+              fontFamily: authorLayer.fontFamily || obj.fontFamily,
+              fontSizeRatio: (obj.fontSize || authorLayer.fontSize || 24) / minDim,
+              scaleX: obj.scaleX || 1,
+              scaleY: obj.scaleY || 1,
+              angle: obj.angle || 0,
+              charSpacing: authorLayer.charSpacing ?? obj.charSpacing ?? 0,
+              lineHeight: authorLayer.lineHeight ?? obj.lineHeight ?? 1.2,
+              fontWeight: authorLayer.fontWeight || obj.fontWeight || 'normal',
+              textAlign: authorLayer.textAlign || obj.textAlign || 'center',
+              textColor: authorLayer.textColor || obj.fill || '#000000',
+              opacity: authorLayer.opacity ?? obj.opacity ?? 1
+            };
+          }
+
+          savedGroups.push(groupData);
+          if (persistSavedGroups()) {
+            renderGroupList();
+            showToast(`💾 "${groupName}" 워터마크 그룹이 저장되었습니다!`);
+          } else {
+            savedGroups.pop();
+          }
         });
       }
 
       loadSavedLogos();
+      loadSavedAuthor();
+      loadSavedGroups();
     })();
 
     // 마지막 설정 복원, 초기 화면 맞춤 및 저장된 프리셋 로드
